@@ -142,3 +142,11 @@ Code is MIT. See [LICENSE](LICENSE).
 
 The player icons use JetBrains Mono Nerd Font, which is covered by the
 [SIL Open Font License](kpm/waf/fonts/OFL.txt), not the MIT license.
+
+## Publishing
+
+Build with `just package <version>` and upload the `.kpkg` to the matching
+GitHub Release (`v<version>`). Then run `just publish <version>` to update
+the shared KPM catalog with the release download URL. Package archives stay
+in GitHub Releases; only their URLs are stored in the catalog. The release
+workflow can update the catalog when `KINDLE_CATALOG_TOKEN` is configured.
