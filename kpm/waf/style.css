@@ -1,0 +1,90 @@
+/* Monochrome CSS2 layout for Mesquite. */
+@font-face {
+    font-family: "JBMonoNerd";
+    src: url("fonts/JetBrainsMonoNerdFontMono-Regular.ttf");
+}
+
+.app-icon, .button-icon, .transport button, .overlay-icon { font-family: "JBMonoNerd", monospace; }
+button { cursor: pointer; }
+button:disabled { color: #999; border-color: #aaa; }
+button:active, .feed-pick:active { background: #000; color: #fff; }
+button.primary:active { background: #fff; color: #000; }
+
+.page { padding: 0.3em 0.45em 0.2em; }
+.transport button.on { background: #000; color: #fff; }
+.error {
+    display: none;
+    clear: both;
+    margin: 0.35em 0 0;
+    padding: 0.28em 0.45em;
+    border: 2px solid #000;
+    background: #000;
+    color: #fff;
+    font-size: 0.7em;
+    font-weight: bold;
+    line-height: 1.3em;
+    max-height: 2.6em;
+    overflow: hidden;
+}
+
+.tabs { border: 0; border-bottom: 1px solid #000; margin: 0 0 0.5em; padding: 0.35em 0 0; }
+.tabs button { font: bold 0.83em Arial, sans-serif; border: 0; border-bottom: 3px solid transparent; background: #fff; color: #444; padding: 0.5em 1.25em 0.4em; margin: 0 0.15em 0 0; }
+.tabs button.active { color: #000; background: #fff; border-bottom-color: #000; }
+.view { margin: 0; }
+
+.player { border: 2px solid #000; background: #fff; padding: 0.3em 0.45em 0.35em; margin-bottom: 0.3em; }
+.np-title { font-size: 0.92em; line-height: 1.25em; height: 1.25em; overflow: hidden; white-space: nowrap; font-weight: bold; }
+.player-meta { overflow: hidden; margin: 0.1em 0 0.25em; }
+.np-meta { font-size: 0.68em; color: #444; }
+.bar { height: 0.45em; border: 1px solid #000; background: #fff; }
+.bar-fill { height: 0.45em; width: 0; background: #000; }
+.np-time { font: 0.68em "JBMonoNerd", monospace; text-align: right; margin: 0.15em 0 0.2em; min-height: 1em; }
+.transport { overflow: hidden; border-top: 1px solid #aaa; padding-top: 0.3em; }
+.transport-left { float: left; }
+.transport-right { float: right; }
+.transport button { min-width: 2.8em; height: 2.15em; border: 1px solid #000; background: #fff; font-size: 0.85em; margin: 0 0.12em 0.1em; padding: 0 0.2em; }
+.transport button .n { font: bold 0.62em Arial, sans-serif; }
+.compact .np-title, .compact .player-meta, .compact .bar, .compact .np-time { display: none; }
+.compact .player { padding: 0.2em 0.3em; margin-bottom: 0.15em; }
+.compact .transport { border-top: 0; padding-top: 0; }
+.text-action { display: block; margin: 0.55em 0 0; padding: 0.25em 0; border: 0; border-bottom: 1px solid #000; background: #fff; font: bold 0.74em Arial, sans-serif; }
+
+.section-head { overflow: hidden; border-bottom: 2px solid #000; padding: 0.2em 0 0.35em; margin: 0.4em 0 0.35em; }
+.section-title { font-size: 0.9em; font-weight: bold; line-height: 1.8; }
+.section-head button { float: right; }
+.section-head button, .field button, .buttons button, .pager button, .transcript-pager button { border: 1px solid #000; background: #fff; color: #000; font: bold 0.7em Arial, sans-serif; padding: 0.45em 0.7em; }
+.section-head button:active, .field button:active, .buttons button:active, .pager button:active, .transcript-pager button:active { background: #000; color: #fff; }
+
+.row { border-bottom: 1px solid #aaa; padding: 0.42em 0.1em 0.5em; background: #fff; }
+.row.current { border-left: 4px solid #000; padding-left: 0.5em; background: #f3f3f3; }
+.row-title { font-size: 0.85em; line-height: 1.3; font-weight: bold; word-wrap: break-word; }
+.row-meta { font-size: 0.68em; color: #555; margin: 0.25em 0 0.42em; }
+.row .buttons { margin: 0; }
+.row .buttons button { margin: 0 0.3em 0 0; }
+.row .buttons button.icon-btn { font-family: "JBMonoNerd", monospace; min-width: 2.2em; padding: 0.3em 0.35em; }
+.noplay { font-size: 0.68em; color: #555; margin-right: 0.6em; }
+.empty { font-size: 0.76em; line-height: 1.4; padding: 0.7em 0.2em; word-wrap: break-word; }
+
+.search-row { padding: 0.1em 0 0.4em; border-bottom: 1px solid #aaa; }
+.cap-label { display: block; font-size: 0.67em; font-weight: bold; margin-bottom: 0.3em; }
+.search-row input[type="text"] { width: 47%; border: 1px solid #000; font: 0.76em Arial, sans-serif; padding: 0.42em 0.3em; margin-right: 0.25em; }
+.search-row button { margin-right: 0.25em; }
+.pager { text-align: center; margin: 0.45em 0; font-size: 0.77em; }
+.pager button { margin: 0 0.55em; }
+
+.overlay { position: absolute; top: 0.55em; left: 0.55em; right: 0.55em; z-index: 10; border: 2px solid #000; background: #fff; padding: 0.65em; min-height: 12em; }
+.overlay-header { overflow: hidden; border-bottom: 2px solid #000; padding-bottom: 0.45em; margin-bottom: 0.65em; }
+.overlay-title { font-size: 1em; font-weight: bold; line-height: 1.4; margin-right: 2.4em; word-wrap: break-word; }
+.overlay .overlay-icon { float: right; width: 2.2em; height: 2.2em; border: 1px solid #000; background: #fff; font-size: 0.8em; padding: 0; }
+.overlay .feed-pick { border-bottom: 1px solid #aaa; font-size: 0.8em; padding: 0.7em 0.3em; word-wrap: break-word; }
+.overlay .search-row input[type="text"] { width: 62%; }
+.overlay .row { padding-top: 0.35em; }
+html, body { overflow: hidden; height: 100%; }
+.transcript-copy { height: 11.6em; overflow: hidden; min-height: 0; }
+.transcript-line { font: 0.95em/1.45 Georgia, serif; height: 1.45em; overflow: hidden; white-space: nowrap; }
+.transcript-meta { font: 0.7em Arial, sans-serif; margin: 0.35em 0; }
+.transcript-meta button { border: 1px solid #000; background: #fff; font: bold 0.95em Arial, sans-serif; padding: 0.3em 0.55em; margin-left: 0.6em; }
+.cue-now { font-weight: normal; text-decoration: underline; }
+.transcript-message { font-size: 0.8em; padding: 1em 0; }
+.transcript-pager { border-top: 1px solid #aaa; margin-top: 0.7em; padding-top: 0.55em; text-align: center; }
+.transcript-pager span { font: 0.7em Arial, sans-serif; margin: 0 0.9em; }
