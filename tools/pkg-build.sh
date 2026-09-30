@@ -83,7 +83,7 @@ import re, sys
 for path in sys.argv[1:3]:
     with open(path) as f:
         text = f.read()
-    text, _ = re.subn(r"((?:style\.css|core\.js|views\.js|overlay\.js|script\.js))(\?v=[0-9.]+)?", r"\1?v=" + sys.argv[3], text)
+    text, _ = re.subn(r"((?:waf-base\.css|waf-base\.js|style\.css|core\.js|views\.js|overlay\.js|script\.js))(\?v=[0-9.]+)?", r"\1?v=" + sys.argv[3], text)
     with open(path, "w") as f:
         f.write(text)
 EOF
