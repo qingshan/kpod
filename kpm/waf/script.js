@@ -19,6 +19,7 @@ function currentExploreFeed() {
 }
 
 function sendExplore(offset) {
+    kpodState.searchPage = 0;
     sendCmd({
         op: "explore_query",
         query: currentExploreQuery(),
@@ -45,22 +46,8 @@ function onListTap(target) {
         }
         return;
     }
-    if (nav === "ex-prev" || nav === "ex-next") {
-        if (!kpodState.lastData || !kpodState.lastData.explore) {
-            return;
-        }
-        var limit = kpodState.lastData.explore.limit || 5;
-        var offset = kpodState.lastData.explore.offset || 0;
-        var next = nav === "ex-next" ? offset + limit : offset - limit;
-        if (next < 0) {
-            next = 0;
-        }
-        sendCmd({
-            op: "explore_query",
-            query: kpodState.lastData.explore.query || "",
-            feed: kpodState.lastData.explore.feed || "",
-            offset: next
-        });
+    if (nav === "ex-page") {
+        openPagePicker();
         return;
     }
     if (!op || !id) {
@@ -69,11 +56,20 @@ function onListTap(target) {
     if (op === "transcript") {
         openTranscript(id);
     } else if (op === "play") {
-        sendCmd({ op: "play_start", id: id });
+        var data = kpodState.lastData;
+        var current = data && data.playing && data.currentId === id;
+        if (data && data.playing && !current) {
+            var items = data.playlist || [];
+            var i;
+            for (i = 0; i < items.length; i++) {
+                if (items[i].id === id && items[i].current) { current = true; break; }
+            }
+        }
+        sendCmd(current ? { op: "play_stop" } : { op: "play_start", id: id });
     } else if (op === "remove") {
         sendCmd({ op: "playlist_remove", id: id });
-    } else if (op === "up" || op === "down") {
-        sendCmd({ op: "playlist_move", id: id, dir: op === "up" ? -1 : 1 });
+    } else if (op === "position") {
+        openPositionPicker(id);
     } else if (op === "add") {
         sendCmd({ op: "playlist_add", id: id });
     }
@@ -130,25 +126,18 @@ function pollNav() {
     try { xhr.send(null); } catch (err3) {}
 }
 
-function syncOrStopSync() {
-    if (kpodState.lastData && taskRunning(kpodState.lastData) && kpodState.lastData.phase === "syncing") {
-        sendCmd({ op: "sync_stop" });
-        return;
-    }
-    sendCmd({ op: "sync_now" });
-}
-
 function pageContent(dir) {
     if (!dir) { return; }
-    if (kpodState.overlayKind === "library") {
-        kpodState.libraryPage += dir;
-        renderLibrary();
-        return;
-    }
     if (kpodState.overlayKind) { return; }
     if (kpodState.panel === "explore") {
         if (!kpodState.lastData || !kpodState.lastData.explore) { return; }
-        var limit = kpodState.lastData.explore.limit || 5;
+        if (kpodState.lastData.queueMode) {
+            var paging = explorePaging(kpodState.lastData);
+            kpodState.searchPage = Math.max(0, Math.min(paging.page + dir, paging.pageCount - 1));
+            renderExplore(kpodState.lastData);
+            return;
+        }
+        var limit = kpodState.lastData.explore.limit || 10;
         var offset = kpodState.lastData.explore.offset || 0;
         var next = offset + dir * limit;
         if (next < 0) { next = 0; }
@@ -273,12 +262,10 @@ document.addEventListener("DOMContentLoaded", function () {
             fitTranscript();
         }
     });
-    bindTap(byId("btn-sync-ex"), syncOrStopSync);
     bindTap(byId("btn-search"), function () {
         sendExplore(0);
     });
     bindTap(byId("btn-feed"), openFeedPicker);
-    bindTap(byId("btn-add-show"), openLibrary);
     bindTap(byId("overlay-close"), closeOverlay);
     byId("transcript-panel").addEventListener("mousedown", function (ev) {
         var target = ev.target || ev.srcElement;
@@ -317,41 +304,67 @@ document.addEventListener("DOMContentLoaded", function () {
     hookPageKeys();
 
     byId("overlay-body").addEventListener("mousedown", function (ev) {
-        if (kpodState.overlayKind === "library") {
-            var libTarget = ev.target || ev.srcElement;
-            if (!libTarget || !libTarget.getAttribute || libTarget.disabled) {
-                return;
-            }
-            var libNav = libTarget.getAttribute("data-nav");
-            var libOp = libTarget.getAttribute("data-op");
-            if (libNav === "lib-prev" || libNav === "lib-next") {
-                flashThen(libTarget, function () {
-                    kpodState.libraryPage += libNav === "lib-next" ? 1 : -1;
-                    renderLibrary();
-                });
-                return;
-            }
-            if (libOp === "subscribe") {
-                flashThen(libTarget, function () {
-                    sendCmd({
-                        op: "feed_add",
-                        url: libTarget.getAttribute("data-url") || "",
-                        title: libTarget.getAttribute("data-title") || ""
-                    });
-                });
-            }
-            return;
-        }
         var target = ev.target || ev.srcElement;
-        if (!target || !target.getAttribute) {
+        if (!target || !target.getAttribute || target.disabled) {
             return;
         }
-        if (target.className !== "feed-pick") {
+        if (kpodState.overlayKind === "position") {
+            var position = Number(target.getAttribute("data-position"));
+            var nav = target.getAttribute("data-position-nav");
+            if (nav === "prev" || nav === "next") {
+                flashThen(target, function () {
+                    kpodState.positionPage += nav === "next" ? 1 : -1;
+                    renderPositionPicker();
+                });
+            } else if (target.getAttribute("data-position") !== null &&
+                       position > 0 && position <= kpodState.lastData.playlist.length) {
+                flashThen(target, function () {
+                    var id = kpodState.positionId;
+                    var playing = kpodState.lastData.playing;
+                    closeOverlay();
+                    if (playing && position === 1) {
+                        sendCmd({ op: "play_start", id: id });
+                    } else {
+                        sendCmd({ op: "playlist_move", id: id, position: position });
+                    }
+                });
+            }
+            return;
+        }
+        if (kpodState.overlayKind === "pages") {
+            var page = Number(target.getAttribute("data-page-number"));
+            var pageNav = target.getAttribute("data-page-nav");
+            if (pageNav === "prev" || pageNav === "next") {
+                flashThen(target, function () {
+                    kpodState.searchPagePickerPage += pageNav === "next" ? 1 : -1;
+                    renderPagePicker();
+                });
+            } else if (target.getAttribute("data-page-number") !== null) {
+                var ex = kpodState.lastData.explore;
+                var paging = explorePaging(kpodState.lastData);
+                if (page < 1 || page > paging.pageCount || page === paging.page + 1) {
+                    return;
+                }
+                flashThen(target, function () {
+                    closeOverlay();
+                    if (kpodState.lastData.queueMode) {
+                        kpodState.searchPage = page - 1;
+                        renderExplore(kpodState.lastData);
+                    } else {
+                        sendCmd({ op: "explore_query", query: ex.query || "", feed: ex.feed || "",
+                            offset: (page - 1) * paging.limit });
+                    }
+                });
+            }
+            return;
+        }
+        if ((" " + target.className + " ").indexOf(" feed-pick ") < 0) {
             return;
         }
         var feed = target.getAttribute("data-feed") || "";
         flashThen(target, function () {
             closeOverlay();
+            kpodState.searchPage = 0;
             sendCmd({
                 op: "explore_query",
                 query: currentExploreQuery(),

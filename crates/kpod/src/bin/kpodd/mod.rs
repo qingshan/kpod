@@ -29,6 +29,7 @@ pub(super) fn spawn_bluetooth() {
 }
 
 static WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+static QUEUE_UPDATE_RUNNING: AtomicBool = AtomicBool::new(false);
 static PLAYING_JOB: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 static PLAY_STOP: AtomicBool = AtomicBool::new(false);
@@ -179,14 +180,39 @@ fn resolve_play_id(requested: &str) -> Option<String> {
 }
 
 fn set_current_id(id: &str) {
-    {
+    let moved = {
         let mut pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
         if pl.contains(id) {
             pl.current_id = Some(id.to_string());
-            pl.move_to_front(id);
+            pl.move_to_front(id)
+        } else {
+            false
+        }
+    };
+    if moved && !current_config().queue_url.is_empty() {
+        if let Err(error) = kpodd::queue::change(
+            &current_config(),
+            "move",
+            serde_json::json!({ "id": id, "position": 1 }),
+        ) {
+            set_status(|s| s.last_error = Some(error));
         }
     }
     persist_playlist_locked();
+}
+
+fn report_playback(id: &str, started: bool) {
+    if current_config().queue_url.is_empty() {
+        return;
+    }
+    let episode_id = id.to_string();
+    std::thread::spawn(move || {
+        let _ = kpodd::queue::change(
+            &current_config(),
+            "playback",
+            serde_json::json!({ "id": episode_id, "started": started }),
+        );
+    });
 }
 
 fn neighbor_id(dir: i32) -> Option<String> {
@@ -212,6 +238,7 @@ pub(super) fn initialize() {
         s.max_episodes = cfg.max_episodes;
         s.compact = cfg.compact;
         s.transcript_api = !cfg.transcript_api.trim().is_empty();
+        s.queue_mode = !cfg.queue_url.trim().is_empty();
     });
     let on_update = || write_status_file();
     sync::run_refresh(
@@ -223,12 +250,11 @@ pub(super) fn initialize() {
         Path::new(LOG_PATH),
         &on_update,
     );
-    let saved = {
+    let (current, saved) = {
         let pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
-        pl.current_id
-            .as_ref()
-            .map(|id| pl.progress_of(id))
-            .unwrap_or(0)
+        let current = pl.current_id.clone();
+        let saved = current.as_ref().map(|id| pl.progress_of(id)).unwrap_or(0);
+        (current, saved)
     };
     if saved > 0 {
         set_status(|s| {
@@ -236,7 +262,25 @@ pub(super) fn initialize() {
         });
         write_status_file();
     }
+    if let Some(id) = current {
+        report_playback(&id, saved > 0);
+    }
     log_line(Path::new(LOG_PATH), "daemon start");
+    if !current_config().queue_url.is_empty() {
+        worker::start_job(worker::Job::Sync);
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(45));
+            if !WORKER_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+                && !QUEUE_UPDATE_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                worker::start_job(worker::Job::Sync);
+            } else if lock_status(status_mutex()).playing {
+                worker::start_queue_update();
+            }
+            let ex = lock_status(status_mutex()).explore.clone();
+            dispatcher::refresh_queue_search(ex.query, ex.feed);
+        });
+    }
 }
 
 /// Store the current episode's position. While audio is running, skip writes

@@ -1,16 +1,96 @@
 use super::{
     catalog_mutex, current_config, index_mutex, play_skip, playlist_mutex, publish,
     remember_progress, set_current_id, set_status, status_mutex, write_status_file, PLAYING_JOB,
-    PLAY_STOP, STOP, WORKER_RUNNING,
+    PLAY_STOP, QUEUE_UPDATE_RUNNING, STOP, WORKER_RUNNING,
 };
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use kpodd::lock_status;
 use kpodd::playback;
 use kpodd::status;
 use kpodd::sync::{self, log_line};
 use kpodd::LOG_PATH;
+
+const SUSPEND_LEASE_SECS: &str = "30";
+const SUSPEND_RENEW_AFTER: Duration = Duration::from_secs(15);
+
+struct SuspendDeferral {
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SuspendDeferral {
+    fn start() -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            let mut last_renewal: Option<Instant> = None;
+            while !done.load(Ordering::SeqCst) {
+                let playing = lock_status(status_mutex()).playing;
+                let ready = (playing || last_renewal.is_some()) && powerd_ready_to_suspend();
+                if playing
+                    && ready
+                    && last_renewal.is_none_or(|at| at.elapsed() >= SUSPEND_RENEW_AFTER)
+                    && set_suspend_deferral(SUSPEND_LEASE_SECS)
+                {
+                    last_renewal = Some(Instant::now());
+                }
+                if !playing && last_renewal.is_some() && ready {
+                    let _ = set_suspend_deferral("0");
+                }
+                if !playing || !ready {
+                    last_renewal = None;
+                }
+                for _ in 0..10 {
+                    if done.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            if last_renewal.is_some() && powerd_ready_to_suspend() {
+                let _ = set_suspend_deferral("0");
+            }
+        });
+        Self {
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for SuspendDeferral {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn powerd_ready_to_suspend() -> bool {
+    Command::new("lipc-get-prop")
+        .args(["com.lab126.powerd", "state"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .eq_ignore_ascii_case("readyToSuspend")
+        })
+}
+
+fn set_suspend_deferral(seconds: &str) -> bool {
+    Command::new("lipc-set-prop")
+        .args(["-i", "com.lab126.powerd", "deferSuspend", seconds])
+        .status()
+        .is_ok_and(|status| status.success())
+}
 
 pub(crate) enum Job {
     /// Fetch OPML feeds, auto-queue latest, download queued files.
@@ -33,6 +113,28 @@ pub(super) fn start_job(job: Job) {
     }
     STOP.store(false, Ordering::SeqCst);
     std::thread::spawn(move || run_job(job));
+}
+
+pub(super) fn start_queue_update() {
+    if QUEUE_UPDATE_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        let on_update = || write_status_file();
+        if let Err(error) = sync::update_queue_while_playing(
+            index_mutex(),
+            catalog_mutex(),
+            playlist_mutex(),
+            &current_config(),
+            status_mutex(),
+            Path::new(LOG_PATH),
+            &on_update,
+        ) {
+            set_status(|s| s.last_error = Some(error));
+        }
+        publish();
+        QUEUE_UPDATE_RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 pub(super) fn request_play(id: String) {
@@ -79,13 +181,15 @@ fn run_job(job: Job) {
                 s.started_at = Some(kpodd::now_epoch());
             });
             sync::run_sync(
-                index_mutex(),
-                catalog_mutex(),
-                playlist_mutex(),
+                sync::SyncStores {
+                    index: index_mutex(),
+                    catalog: catalog_mutex(),
+                    playlist: playlist_mutex(),
+                    status: status_mutex(),
+                    log_path,
+                },
                 &current_config(),
                 &STOP,
-                status_mutex(),
-                log_path,
                 &on_update,
                 &|id| super::prefetch_transcript(id),
             );
@@ -129,8 +233,11 @@ fn run_job(job: Job) {
         }
         Job::Play(start_id) => {
             PLAYING_JOB.store(true, Ordering::SeqCst);
+            let deferral = SuspendDeferral::start();
             let mut id = start_id;
+            let mut played = std::collections::HashSet::new();
             loop {
+                played.insert(id.clone());
                 *play_skip() = None;
                 PLAY_STOP.store(false, Ordering::SeqCst);
                 set_current_id(&id);
@@ -186,6 +293,7 @@ fn run_job(job: Job) {
                     }
                 }
                 log_line(log_path, &format!("play start: {} ({})", title, id));
+                super::report_playback(&id, true);
                 let mut start = lock_status(status_mutex()).play_position;
                 loop {
                     set_status(|s| {
@@ -227,10 +335,12 @@ fn run_job(job: Job) {
                                 s.play_position = 0;
                             });
                             remember_progress(true);
+                            super::report_playback(&id, false);
                             break;
                         }
                         Err(err) => {
                             set_status(|s| {
+                                s.playing = false;
                                 s.last_error = Some(err.clone());
                             });
                             log_line(log_path, &format!("playback error: {}", err));
@@ -255,7 +365,7 @@ fn run_job(job: Job) {
                 // Natural end: advance.
                 let next = {
                     let pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
-                    pl.neighbor(&id, 1)
+                    pl.next_unplayed(&id, &played)
                 };
                 match next {
                     Some(n) => {
@@ -271,6 +381,10 @@ fn run_job(job: Job) {
                     None => break,
                 }
             }
+            drop(deferral);
+            set_status(|s| {
+                s.playing = false;
+            });
             PLAYING_JOB.store(false, Ordering::SeqCst);
         }
     }

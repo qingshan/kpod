@@ -62,6 +62,13 @@ button.primary:active { background: #fff; color: #000; }
 .row .buttons { margin: 0; }
 .row .buttons button { margin: 0 0.3em 0 0; }
 .row .buttons button.icon-btn { font-family: "JBMonoNerd", monospace; min-width: 2.2em; padding: 0.3em 0.35em; }
+.row .buttons button.position-btn { width: 2.2em; padding: 0.3em 0.35em; }
+.row .buttons button.position-current { background: #000; color: #fff; border-color: #000; }
+#playlist .row, #explore-list .row { overflow: hidden; padding: 0.1em 0.1em 0.12em; }
+#playlist .row.current { padding-left: 0.5em; }
+#playlist .row .buttons, #explore-list .row .buttons { float: right; margin: 0 0 0 0.5em; white-space: nowrap; }
+#playlist .row-title, #explore-list .row-title { font-size: 0.72em; font-weight: normal; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#playlist .row-meta, #explore-list .row-meta { font-size: 0.58em; margin: 0.03em 0 0; }
 .noplay { font-size: 0.68em; color: #555; margin-right: 0.6em; }
 .empty { font-size: 0.76em; line-height: 1.4; padding: 0.7em 0.2em; word-wrap: break-word; }
 
@@ -69,14 +76,28 @@ button.primary:active { background: #fff; color: #000; }
 .cap-label { display: block; font-size: 0.67em; font-weight: bold; margin-bottom: 0.3em; }
 .search-row input[type="text"] { width: 47%; border: 1px solid #000; font: 0.76em Arial, sans-serif; padding: 0.42em 0.3em; margin-right: 0.25em; }
 .search-row button { margin-right: 0.25em; }
+.episode-search { overflow: hidden; white-space: nowrap; padding: 0.05em 0 0.15em; }
+.episode-search input[type="text"] { width: 31%; }
+.episode-search button { padding: 0.4em 0.5em; }
+#btn-feed { width: 7em; overflow: hidden; white-space: nowrap; }
+#ex-pager { float: right; margin: 0; font-size: 1em; line-height: 1; }
+#ex-pager button { min-width: 2.4em; margin: 0; font-size: 0.7em; }
 .pager { text-align: center; margin: 0.45em 0; font-size: 0.77em; }
 .pager button { margin: 0 0.55em; }
+.pager button.icon-btn { font-family: "JBMonoNerd", monospace; min-width: 2.2em; }
 
 .overlay { position: absolute; top: 0.55em; left: 0.55em; right: 0.55em; z-index: 10; border: 2px solid #000; background: #fff; padding: 0.65em; min-height: 12em; }
 .overlay-header { overflow: hidden; border-bottom: 2px solid #000; padding-bottom: 0.45em; margin-bottom: 0.65em; }
 .overlay-title { font-size: 1em; font-weight: bold; line-height: 1.4; margin-right: 2.4em; word-wrap: break-word; }
 .overlay .overlay-icon { float: right; width: 2.2em; height: 2.2em; border: 1px solid #000; background: #fff; font-size: 0.8em; padding: 0; }
 .overlay .feed-pick { border-bottom: 1px solid #aaa; font-size: 0.8em; padding: 0.7em 0.3em; word-wrap: break-word; }
+.overlay .feed-pick.selected { background: #000; color: #fff; font-weight: bold; }
+.position-title { font: 0.75em Arial, sans-serif; margin-bottom: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.position-choices { max-width: 25em; }
+.position-choice { width: 17%; margin: 0 2% 0.5em 0; padding: 0.65em 0; border: 1px solid #000; background: #fff; font: bold 0.85em Arial, sans-serif; }
+.position-choice.selected { background: #000; color: #fff; }
+.position-pager { margin-top: 0.5em; font: 0.8em Arial, sans-serif; }
+.position-pager button { border: 1px solid #000; background: #fff; padding: 0.35em 0.7em; }
 .overlay .search-row input[type="text"] { width: 62%; }
 .overlay .row { padding-top: 0.35em; }
 html, body { overflow: hidden; height: 100%; }

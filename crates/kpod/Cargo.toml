@@ -1,6 +1,6 @@
 [package]
 name = "kpod"
-version = "0.6.2"
+version = "0.6.25"
 edition.workspace = true
 license.workspace = true
 description = "Podcast download daemon (LIPC service dev.qingshan.kpodd) for the kpod Kindle package"

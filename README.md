@@ -2,17 +2,19 @@
 
 ## A podcast player for an e-ink Kindle.
 
-kpod turns a jailbroken Kindle into a podcast player. It keeps an OPML
-subscription list, downloads MP3 episodes, and plays them through a paired
-Bluetooth speaker. The page shows the episode, the queue, and a transcript
-that follows playback, with controls laid out for an e-ink screen. It targets
-a Kindle Oasis 10th generation (`kindlehf`, firmware 5.16.x) with
-[KPM](https://github.com/KindleModding/KPM) installed.
+kpod turns a jailbroken Kindle into a podcast player. In personal queue mode,
+`kpod.qingshan.dev` indexes subscribed feeds, prepares transcripts, and
+publishes a private queue feed. The Kindle downloads MP3 episodes and plays
+them through a paired Bluetooth speaker. The page shows the episode, queue,
+and a transcript that follows playback, with controls laid out for an e-ink
+screen. It targets a Kindle Oasis 10th generation (`kindlehf`, firmware 5.16.x)
+with [KPM](https://github.com/KindleModding/KPM) installed.
 
 ![kpod feature tour](docs/kpod-demo.gif)
 
-The demo is captured from a real Kindle Oasis. It shows the player with a
-connected Bluetooth speaker, the queue, Explore, Compact, and the transcript.
+The demo is captured from a real Kindle Oasis. It shows the player and
+transcript, queue and position picker, Explore search, page and feed pickers,
+and Compact view. It also explains episode submission and queue preparation.
 
 ## What you need
 
@@ -21,7 +23,7 @@ connected Bluetooth speaker, the queue, Explore, Compact, and the transcript.
 - Wi-Fi, for feeds, episodes, and transcripts.
 - A paired Bluetooth speaker or headphones. Pair it in Kindle Settings.
   The player can reconnect that speaker; it does not pair a new one.
-- An OPML file, or a show added from the in-app directory.
+- An OPML file or shows subscribed through the server queue CLI.
 
 kpod plays MP3 episodes. Other enclosures can appear in Explore and are
 marked unavailable.
@@ -40,12 +42,19 @@ To start from an OPML export, copy it to:
 /mnt/us/kpod/var/subscriptions.opml
 ```
 
-Open kpod and tap **Sync** in Explore. Sync reads the feeds, keeps a catalog
-of episodes, and queues the latest MP3s up to the retention cap (20 by
-default).
+For a server queue, add or remove shows and refresh their feeds from the
+repository with `./tools/kpod-transcript/kpod.sh feeds`. Run `kpod.sh help`
+for all feed, queue, transcript, and submitted-episode commands.
 
-You can also tap **Add show**, search the public podcast directory, or paste
-a feed URL.
+To use the prepared queue, set `queueUrl` to the private `/queue.xml` URL and
+`queueToken` to the separate device token in `/mnt/us/kpod/var/config.json`.
+The Kindle then syncs that one feed, searches the server catalog, and sends
+Add, Remove, and Move actions to the server. An added episode shows
+**Preparing transcript** until a feed transcript has been cached or Whisper
+finishes one; only ready episodes appear in the playing queue. New episodes
+enter position 2 while the first episode is in progress, including when
+paused, and position 1 when it is unplayed or finished. The local OPML and
+downloads remain on the Kindle so switching back does not erase them.
 
 ## Listening
 
@@ -58,12 +67,16 @@ played time next to the episode length.
 | Play | Play or pause the current episode |
 | Bluetooth | Connect the paired speaker, or disconnect it |
 | Up next | The play queue |
-| Explore | Search the catalog, sync, and add shows |
+| Explore | Search episodes and filter by show |
 | Compact | Hide the title and progress row |
 
 The line under the player is the transcript. It follows playback. The
 highlighted sentence is underlined. Feed transcripts (plain text, WebVTT,
 SRT, or JSON) are used when the feed provides one.
+
+While audio is playing, kpod defers system suspend after the screen saver
+appears. The screen can stay off during playback. Stopping playback releases
+the deferral; a crashed player leaves at most a 30-second deferral.
 
 A status message sits under the buttons and does not move them. It is hidden
 when there is nothing to report.
@@ -82,20 +95,21 @@ GET {transcriptApi}?url={audio}&id={episode}
 - `503`: still working. kpod keeps asking and shows it when it arrives.
 - `502`: the job failed.
 
-`tools/kpod-transcript/` is one implementation. A small Python service caches
-WebVTT. A worker runs [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-and joins the caption fragments into one cue per sentence. Apple Podcasts
-episode pages are resolved to the embedded audio file before download.
+The TypeScript [`tools/kpod-transcript/`](tools/kpod-transcript/) service runs
+on [celld](https://github.com/denoland/celld). A Durable Object stores jobs and
+cached WebVTT; a runner on your server pulls jobs and runs
+[whisper.cpp](https://github.com/ggerganov/whisper.cpp). It accepts audio URLs
+and Apple Podcasts episode pages. See the service README for setup, deployment,
+and the Kindle `transcriptApi` URL.
 
-```sh
-# On the worker, after whisper-cli and a ggml model are installed:
-/srv/kpod-transcript/transcribe.sh 'AUDIO_OR_APPLE_EPISODE_URL' WORK_ID
-```
-
-Caddy should proxy only `/health` and `/transcript` to `127.0.0.1:8777`.
-See `tools/kpod-transcript/Caddyfile` and `kpod-transcript.service`. Set
-`KTR_WORKER` to an SSH host that has the worker script, or leave it empty to
-run whisper on the same machine.
+The same tool can create a private YouTube podcast: submit a video URL with
+`./tools/kpod-transcript/submit-youtube.sh`, and the runner downloads audio,
+transcribes it, and publishes an MP3, WebVTT, and RSS item. See the
+[YouTube podcast setup](tools/kpod-transcript/README.md#private-youtube-podcast).
+It can also publish individual podcast episode pages into **My Podcast
+Episodes**; see [submitted podcast episodes](tools/kpod-transcript/README.md#submitted-podcast-episodes).
+The publisher also hosts the personal queue API and private RSS feed; see its
+[queue setup](tools/kpod-transcript/README.md#prepared-playing-queue).
 
 ## Storage and upgrades
 
@@ -107,7 +121,7 @@ KPM reinstalls a package only when its version changes.
 
 ## Troubleshooting
 
-- Empty queue after Sync: confirm the OPML path and that Wi-Fi is connected.
+- Empty queue: confirm the configured feeds and Wi-Fi connection.
 - `mp3 only`: that enclosure is not MP3.
 - No sound: the speaker must be paired in Kindle Settings. Use the Bluetooth
   button to connect it, then play again. If the Kindle reports the speaker

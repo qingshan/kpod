@@ -2,9 +2,9 @@
 """Capture the kpod demo storyboard from a real Kindle, stop by stop.
 
 Each content frame is a framebuffer PNG. Transport taps are measured from the
-opening frame (see geometry.py). The tour opens Up next, Explore, and Compact,
-then puts the player back. It does not sync, seek, start or stop playback,
-toggle Bluetooth, search, add a show, or edit the queue.
+opening frame (see geometry.py). The tour visits the transcript, queue,
+position picker, Explore, page picker, feed filter, search, and Compact view.
+It restores the search and layout state before leaving the player.
 
 Output:
     target/demo/frames/NN-label.png
@@ -31,33 +31,55 @@ STORYBOARD = ROOT / "target/demo/frames.json"
 SETTLE = 2.0
 
 STORY = [
-    {"label": "01-open", "kind": "card", "dwell": 2800,
+    {"label": "01-open", "kind": "card", "dwell": 2400,
      "subtitle": "Podcasts on a Kindle",
-     "lines": ["queue, explore, and a transcript", "playback stays on the device"],
+     "lines": ["Find episodes. Build a queue.", "Read along while listening."],
      "footer": "Kindle Oasis",
      "headline": "kpod",
      "detail": "A podcast player for a jailbroken Kindle."},
-    {"label": "02-player", "caption": "Now playing", "dwell": 3200,
-     "headline": "Now playing",
-     "detail": "The daemon decodes the episode. The page is the remote."},
-    {"label": "03-up-next", "caption": "Up next", "dwell": 3200, "panel": "upnext",
+    {"label": "02-transcript", "caption": "Player and transcript", "dwell": 3000,
+     "headline": "Listen and read",
+     "detail": "Play, pause, skip 15 seconds, and connect a Bluetooth speaker. Sentence cues follow playback."},
+    {"label": "03-up-next", "caption": "Up next", "dwell": 3000, "panel": "upnext",
      "headline": "Up next",
-     "detail": "The play queue, without starting a download."},
-    {"label": "04-explore", "caption": "Explore", "dwell": 3400, "panel": "explore",
+     "detail": "The queue shows download state, playback, position numbers, and removal controls."},
+    {"label": "04-position", "caption": "Choose queue position", "dwell": 2500,
+     "headline": "Arrange the queue",
+     "detail": "Tap a position number to choose where an episode plays next."},
+    {"label": "05-explore", "caption": "Explore episodes", "dwell": 3000, "panel": "explore",
      "headline": "Explore",
-     "detail": "Episodes already in the catalog. Search and Sync stay untouched."},
-    {"label": "05-compact", "caption": "Compact", "dwell": 2800, "panel": "compact",
-     "headline": "Compact",
-     "detail": "The title and progress row fold away, then the previous layout returns."},
-    {"label": "06-transcript", "caption": "Transcript", "dwell": 3200,
-     "headline": "Transcript",
-     "detail": "Sentence cues follow the episode. The highlight is an underline."},
-    {"label": "07-end", "kind": "card", "dwell": 2800,
+     "detail": "Browse up to 100 search results in pages. The plus button prepares an episode for the queue."},
+    {"label": "06-pages", "caption": "Choose a results page", "dwell": 2300,
+     "headline": "Jump to a page",
+     "detail": "Page selection uses the loaded results, without another server query."},
+    {"label": "07-feeds", "caption": "Filter by show", "dwell": 2700,
+     "headline": "Subscribed shows",
+     "detail": "Choose a feed to narrow Explore. The selected feed is highlighted."},
+    {"label": "08-filtered", "caption": "Episodes from one show", "dwell": 2700,
+     "headline": "One show at a time",
+     "detail": "Public feeds and submitted YouTube or podcast episodes share the catalog."},
+    {"label": "09-search", "caption": "Search episodes", "dwell": 2700,
+     "headline": "Search the catalog",
+     "detail": "Search matches episode titles and descriptions across subscribed feeds."},
+    {"label": "10-compact", "caption": "Compact player", "dwell": 2700, "panel": "compact",
+     "headline": "More reading room",
+     "detail": "Compact view folds the player header away to make room for transcript text."},
+    {"label": "11-queue", "kind": "card", "dwell": 2500,
+     "subtitle": "A ready-to-play queue",
+     "lines": ["Transcribe before adding", "Download queued audio automatically", "Group episodes by show in the feed"],
+     "headline": "Prepared ahead",
+     "detail": "The server prepares transcripts before publishing queue entries; the Kindle downloads their audio."},
+    {"label": "12-ingest", "kind": "card", "dwell": 2500,
+     "subtitle": "Make your own podcast feeds",
+     "lines": ["Submit YouTube or podcast episode links", "Auto-sync feeds or use the CLI", "Search and queue on Kindle"],
+     "headline": "One listening library",
+     "detail": "The CLI manages feeds, submitted episodes, queue entries, and transcripts."},
+    {"label": "13-end", "kind": "card", "dwell": 2200,
      "subtitle": "kpod",
-     "lines": ["frames captured from a Kindle Oasis"],
-     "footer": "the queue on the device was left as it was found",
+     "lines": ["Captured on a Kindle Oasis"],
+     "footer": "kpod.qingshan.dev",
      "headline": "kpod",
-     "detail": "Driven against the installed player. The queue was not edited."},
+     "detail": "Playback, search, queue, and transcript on Kindle."},
 ]
 
 
@@ -83,7 +105,7 @@ def load_gray(png):
 
 
 def fingerprint(state):
-    """Daemon fields this tour must not change."""
+    """Daemon fields this tour restores before leaving."""
     explore = state.get("explore") or {}
     library = state.get("library") or {}
     return {
@@ -97,6 +119,20 @@ def fingerprint(state):
     }
 
 
+def stable_fingerprint(state):
+    """Playback and queue fields no tour stop may change."""
+    value = fingerprint(state)
+    for key in ("query", "feed", "offset"):
+        value.pop(key)
+    return value
+
+
+def button_selected(width, pixels, point):
+    """The left side of a selected transport button is filled black."""
+    x, y = point
+    return pixels[y * width + x - 44] < 80
+
+
 class Capture:
     def __init__(self, page, only=None, start_from=None):
         self.page = page
@@ -107,6 +143,8 @@ class Capture:
         self.buttons = None
         self.baseline = None
         self.compact = None
+        self.search_changed = False
+        self.capture_current = True
 
     def selected(self, label):
         if self.only:
@@ -120,12 +158,15 @@ class Capture:
 
     def write(self):
         STORYBOARD.parent.mkdir(parents=True, exist_ok=True)
-        note = ("Opens Up next, Explore, and Compact on the installed player, "
-                "then restores Compact. Does not sync, play, seek, or edit the queue.")
+        note = ("Captured from the installed Kindle player. The tour restores "
+                "Explore and Compact settings; it does not play, seek, change "
+                "Bluetooth, add episodes, or edit the queue.")
         STORYBOARD.write_text(json.dumps(
             {"app": "kpod", "frames": self.frames, "note": note}, indent=2) + "\n")
 
     def add(self, stop, kind="screen"):
+        if not self.capture_current:
+            return
         entry = {key: stop[key] for key in ("label", "caption", "subtitle", "lines",
                                             "footer", "headline", "detail") if key in stop}
         entry["kind"] = stop.get("kind", kind)
@@ -155,7 +196,23 @@ class Capture:
                     self.buttons = buttons
                     state = page.snapshot()
                     self.baseline = fingerprint(state)
+                    if self.baseline["query"]:
+                        raise AssertionError("clear the current Explore search before recording")
                     self.compact = bool(state.get("compact"))
+                    for panel in ("upnext", "explore"):
+                        if button_selected(width, pixels, buttons[panel]):
+                            page.tap(*buttons[panel])
+                            time.sleep(SETTLE)
+                            image = page.device.screenshot()
+                            width, height, pixels = load_gray(image)
+                    current_id = state.get("currentId") or (state.get("playlist") or [{}])[0].get("id")
+                    if current_id:
+                        page.command({"op": "transcript_open", "id": current_id})
+                        page.wait("transcript ready", lambda current:
+                                  (current.get("transcript") or {}).get("id") == current_id and
+                                  (current.get("transcript") or {}).get("state") == "ready", timeout=30)
+                        time.sleep(3)
+                        image = page.device.screenshot()
                     print("transport", {name: self.buttons[name] for name in self.buttons})
                     print("compact", self.compact, "bt", state.get("btConnected"), state.get("btName"))
                     return image
@@ -177,8 +234,10 @@ class Capture:
         if stop.get("panel") == "compact":
             if bool(state.get("compact")) == self.compact:
                 raise AssertionError("{}: compact did not change".format(stop["label"]))
-        elif fingerprint(state) != self.baseline:
-            raise AssertionError("{}: daemon state changed".format(stop["label"]))
+        if stable_fingerprint(state) != stable_fingerprint(self.page_baseline):
+            raise AssertionError("{}: playback or queue changed".format(stop["label"]))
+        if not stop.get("allow_explore") and fingerprint(state) != self.baseline:
+            raise AssertionError("{}: Explore state changed".format(stop["label"]))
         print("{}: settled".format(stop["label"]))
         self.add(stop)
 
@@ -216,25 +275,84 @@ class Capture:
                            lambda current: bool(current.get("compact")) == self.compact,
                            timeout=10)
 
+    def restore_explore(self):
+        if not self.search_changed:
+            return
+        # Clear the WAF's local input through its on-screen keyboard too.
+        self.page.tap(600, 655)
+        time.sleep(0.6)
+        for _ in range(4):
+            self.page.tap(1135, 1485)
+        self.page.tap(500, 350)
+        self.page.command({"op": "explore_query", "query": self.baseline["query"] or "",
+                           "feed": self.baseline["feed"] or "",
+                           "offset": self.baseline["offset"] or 0})
+        self.page.wait("Explore restored", lambda state: fingerprint(state) == self.baseline,
+                       timeout=25)
+        self.search_changed = False
+
+    def tap_and_shot(self, x, y, stop):
+        self.page.tap(x, y)
+        self.shot(stop)
+
     def run(self):
         page = self.page
         opening = self.prepare()
+        self.page_baseline = page.snapshot()
         try:
             for stop in STORY:
-                if not self.selected(stop["label"]):
-                    continue
+                self.capture_current = self.selected(stop["label"])
                 if stop.get("kind") == "card":
-                    print("{}: card".format(stop["label"]))
+                    if self.capture_current:
+                        print("{}: card".format(stop["label"]))
                     self.add(stop, kind="card")
                     continue
-                panel = stop.get("panel")
-                if panel in ("upnext", "explore"):
-                    page.tap(*self.buttons[panel])
-                    self.shot(stop)
-                    page.tap(*self.buttons[panel])
-                    page.wait(panel + " closed", lambda state: fingerprint(state) == self.baseline)
-                elif panel == "compact":
-                    time.sleep(SETTLE)
+                label = stop["label"]
+                if label == "02-transcript":
+                    self.accept(stop, opening)
+                elif label == "03-up-next":
+                    self.tap_and_shot(*self.buttons["upnext"], stop)
+                elif label == "04-position":
+                    # Position 2 is the first movable row on a typical queue.
+                    self.tap_and_shot(1100, 745, stop)
+                    page.tap(1158, 321)  # close the picker
+                elif label == "05-explore":
+                    self.search_changed = True
+                    page.tap(*self.buttons["explore"])
+                    self.shot(dict(stop, allow_explore=True))
+                elif label == "06-pages":
+                    self.tap_and_shot(1198, 655, dict(stop, allow_explore=True))
+                    page.tap(1158, 321)
+                elif label == "07-feeds":
+                    self.tap_and_shot(144, 655, dict(stop, allow_explore=True))
+                elif label == "08-filtered":
+                    # Choose the first subscribed show below "All feeds".
+                    self.search_changed = True
+                    page.tap(180, 581)
+                    page.wait("feed filter", lambda state: bool((state.get("explore") or {}).get("feed")),
+                              timeout=25)
+                    self.shot(dict(stop, allow_explore=True))
+                elif label == "09-search":
+                    page.tap(144, 655)
+                    page.tap(180, 475)  # All feeds
+                    page.wait("all feeds", lambda state: not (state.get("explore") or {}).get("feed"),
+                              timeout=25)
+                    page.tap(600, 655)
+                    time.sleep(0.6)
+                    for _ in range(4):
+                        page.tap(1135, 1485)
+                    # XTEST text keysyms are remapped by the Kindle keyboard.
+                    # Tap its visible "i" key instead.
+                    page.tap(930, 1255)
+                    page.tap(800, 655)
+                    page.command({"op": "explore_query", "query": "i", "feed": "", "offset": 0})
+                    page.tap(500, 350)  # dismiss the keyboard
+                    page.wait("episode search", lambda state: (state.get("explore") or {}).get("query") == "i",
+                              timeout=25)
+                    self.shot(dict(stop, allow_explore=True))
+                elif label == "10-compact":
+                    self.restore_explore()
+                    page.tap(*self.buttons["explore"])
                     self.tap_until("compact", lambda state: bool(state.get("compact")) != self.compact)
                     self.shot(stop)
                     width, height, pixels = load_gray(page.device.screenshot())
@@ -243,11 +361,10 @@ class Capture:
                         raise AssertionError("compact layout could not be measured")
                     self.buttons = buttons
                     self.tap_until("compact", lambda state: bool(state.get("compact")) == self.compact)
-                elif stop["label"] == "02-player":
-                    self.accept(stop, opening)
                 else:
                     self.shot(stop)
         finally:
+            self.restore_explore()
             self.restore_compact()
         print("captured", len(self.frames), "frames in", FRAMES)
 

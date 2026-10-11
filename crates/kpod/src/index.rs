@@ -96,9 +96,12 @@ pub fn apply_cap_protecting(
         }
     }
     if protected.len() as u64 >= max {
+        let kept_paths: HashSet<&str> = protected.iter().map(|e| e.file.as_str()).collect();
         let mut removed = 0;
         for e in rest {
-            let _ = fs::remove_file(e.abs_path(root));
+            if !kept_paths.contains(e.file.as_str()) {
+                let _ = fs::remove_file(e.abs_path(root));
+            }
             removed += 1;
         }
         return (protected, removed);
@@ -106,13 +109,20 @@ pub fn apply_cap_protecting(
     let keep_rest = (max as usize).saturating_sub(protected.len());
     rest.sort_by_cached_key(|e| std::cmp::Reverse((e.pub_date.unwrap_or(0), e.downloaded_at)));
     let mut removed = 0;
+    let mut evicted = Vec::new();
     while rest.len() > keep_rest {
-        if let Some(evicted) = rest.pop() {
-            let _ = fs::remove_file(evicted.abs_path(root));
+        if let Some(entry) = rest.pop() {
+            evicted.push(entry);
             removed += 1;
         }
     }
     protected.extend(rest);
+    let kept_paths: HashSet<&str> = protected.iter().map(|e| e.file.as_str()).collect();
+    for entry in evicted {
+        if !kept_paths.contains(entry.file.as_str()) {
+            let _ = fs::remove_file(entry.abs_path(root));
+        }
+    }
     (protected, removed)
 }
 
@@ -177,6 +187,22 @@ mod tests {
         assert!(!root.join("feed/old.mp3").exists());
         assert!(root.join("feed/new.mp3").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cap_keeps_a_shared_audio_file_used_by_the_queue() {
+        let dir = std::env::temp_dir().join(format!("kpod-shared-{}", crate::now_epoch()));
+        let root = dir.join("episodes");
+        fs::create_dir_all(root.join("feed")).unwrap();
+        let old = entry("old", 1, 1);
+        let mut queued = entry("queue", 2, 2);
+        queued.file = old.file.clone();
+        fs::write(old.abs_path(&root), b"mp3").unwrap();
+        let protect = HashSet::from(["queue".to_string()]);
+        let (kept, _) = apply_cap_protecting(&root, vec![old, queued], 1, &protect);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].abs_path(&root).is_file());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

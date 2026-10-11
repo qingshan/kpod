@@ -1,6 +1,6 @@
-//! Status snapshot shared with the WAF (written to status.json and served via
-//! the LIPC `status` property). The Now page renders `playlist` plus player
-//! fields; Explore renders the paged `explore` view over the OPML catalog.
+//! Status snapshot shared with the WAF through status.json. The Now page
+//! renders `playlist` plus player fields; Explore renders the `explore` view
+//! from either the local catalog or the server queue.
 //! Playback is daemon-side (minimp3 → GStreamer); the WAF is a remote control.
 
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,10 @@ pub struct ExploreItem {
     pub playable: bool,
     #[serde(default)]
     pub has_transcript: bool,
+    #[serde(default)]
+    pub queue_state: String,
+    #[serde(default)]
+    pub queue_error: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,7 +95,7 @@ pub struct Status {
     pub phase: String,
     /// True while the daemon is streaming an episode to the audio sink.
     pub playing: bool,
-    /// Playback position in seconds (0 when not playing).
+    /// Playback position in seconds; retained when paused, reset on completion.
     pub play_position: u64,
     /// Playing (or last-playing) episode id.
     pub current_id: String,
@@ -110,6 +114,10 @@ pub struct Status {
     /// can still request one.
     #[serde(default)]
     pub transcript_api: bool,
+    #[serde(default)]
+    pub queue_mode: bool,
+    #[serde(default)]
+    pub queue_shows: Vec<QueueShow>,
     /// A paired Bluetooth speaker is the current audio output.
     #[serde(default)]
     pub bt_connected: bool,
@@ -125,6 +133,14 @@ pub struct Status {
     /// Latest podcast-directory search shown by Add show.
     #[serde(default)]
     pub library: LibraryView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueShow {
+    pub id: String,
+    pub title: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -193,6 +209,8 @@ impl Default for Status {
             max_episodes: crate::config::default_max_episodes(),
             compact: false,
             transcript_api: false,
+            queue_mode: false,
+            queue_shows: Vec::new(),
             bt_connected: false,
             bt_name: String::new(),
             updated_at: 0,
@@ -255,6 +273,8 @@ mod tests {
             downloaded: true,
             playable: true,
             has_transcript: true,
+            queue_state: String::new(),
+            queue_error: String::new(),
         });
         let json = s.to_json();
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -273,6 +293,8 @@ mod tests {
             "maxEpisodes",
             "compact",
             "transcriptApi",
+            "queueMode",
+            "queueShows",
             "btConnected",
             "btName",
             "updatedAt",

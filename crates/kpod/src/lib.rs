@@ -19,6 +19,7 @@ pub mod library;
 pub mod opml;
 pub mod playback;
 pub mod playlist;
+pub mod queue;
 pub mod rss;
 pub mod status;
 pub mod sync;

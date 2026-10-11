@@ -2,4 +2,11 @@
 /dist/
 __pycache__/
 *.pyc
+node_modules/
+.cloudflare/
+.env*
 .DS_Store
+
+.celld/
+.dev.vars
+wrangler.production.json

@@ -52,7 +52,7 @@ function renderPlayer(data) {
 
     if (!item) {
         titleEl.innerHTML = "Nothing queued";
-        metaEl.innerHTML = "Sync to add the latest episode from each feed, or open Explore.";
+        metaEl.innerHTML = "Open Explore to add an episode.";
         timeEl.innerHTML = "\u00a0";
         fill.style.width = "0";
         playBtn.innerHTML = "&#xF04B;";
@@ -116,11 +116,13 @@ function renderPager(el, page, pageCount, opPrev, opNext) {
         return;
     }
     var html = "";
-    html += '<button type="button" data-nav="' + opPrev + '"' +
-        (page <= 0 ? " disabled" : "") + ">Prev</button>";
+    html += '<button type="button" class="icon-btn" data-nav="' + opPrev +
+        '" title="Previous page" aria-label="Previous page"' +
+        (page <= 0 ? " disabled" : "") + '>&#xF053;</button>';
     html += " " + (page + 1) + " / " + pageCount + " ";
-    html += '<button type="button" data-nav="' + opNext + '"' +
-        (page + 1 >= pageCount ? " disabled" : "") + ">Next</button>";
+    html += '<button type="button" class="icon-btn" data-nav="' + opNext +
+        '" title="Next page" aria-label="Next page"' +
+        (page + 1 >= pageCount ? " disabled" : "") + '>&#xF054;</button>';
     el.innerHTML = html;
 }
 
@@ -129,53 +131,60 @@ function iconBtn(op, id, glyph, label) {
         '" title="' + label + '" aria-label="' + label + '">' + glyph + '</button>';
 }
 
-function episodeRow(e, inPlaylist, playing, index, total, allowApi) {
-    var html = '<div class="row' + (inPlaylist && e.current ? " current" : "") + '">';
-    html += '<div class="row-title">' + esc(e.title) + '</div>';
-    html += '<div class="row-meta">' + esc(e.feed) +
-        (e.pubDate ? " \u00b7 " + fmtDate(e.pubDate) : "") +
-        (e.duration ? " \u00b7 " + fmtDuration(e.duration) : "") +
-        (inPlaylist && !e.downloaded ? " \u00b7 queued" : "") + '</div>';
-    html += '<div class="buttons">';
+function episodeRow(e, inPlaylist, playing, index, total) {
+    var actions = "";
     var id = esc(e.id);
-    var showText = e.hasTranscript || allowApi;
     if (inPlaylist) {
         if (e.playable) {
             var playingNow = playing && e.current;
-            html += iconBtn("play", id, playingNow ? "&#xF04C;" : "&#xF04B;", playingNow ? "Pause" : "Play");
+            actions += iconBtn("play", id, playingNow ? "&#xF04C;" : "&#xF04B;", playingNow ? "Pause" : "Play");
         } else {
-            html += '<span class="noplay">mp3 only</span>';
+            actions += '<span class="noplay">mp3 only</span>';
         }
-        if (showText) {
-            html += iconBtn("transcript", id, "&#xF15C;", "Transcript");
+        if (playing && e.current) {
+            actions += '<button type="button" class="position-btn position-current" title="Playing now" aria-label="Playing now" disabled>1</button>';
+        } else {
+            actions += '<button type="button" class="position-btn" data-op="position" data-id="' + id +
+                '" title="Move from position ' + index + '" aria-label="Move from position ' +
+                index + '">' + index + '</button>';
         }
-        if (index > 0) {
-            html += iconBtn("up", id, "&#xF062;", "Move earlier");
-        }
-        if (typeof total === "number" && index + 1 < total) {
-            html += iconBtn("down", id, "&#xF063;", "Move later");
-        }
-        html += iconBtn("remove", id, "&#xF1F8;", "Remove");
+        actions += iconBtn("remove", id, "&#xF1F8;", "Remove");
     } else if (e.inPlaylist) {
-        if (showText) {
-            html += '<button type="button" data-op="transcript" data-id="' + id + '">Transcript</button>';
-        }
-        html += '<span class="noplay">in playlist</span>';
+        actions += '<span class="noplay">in playlist</span>';
+    } else if (e.queueState === "pending" || e.queueState === "preparing") {
+        actions += '<span class="noplay">Preparing transcript</span>';
     } else if (e.playable) {
-        if (showText) {
-            html += '<button type="button" data-op="transcript" data-id="' + id + '">Transcript</button>';
-        }
-        html += '<button type="button" data-op="add" data-id="' + id + '">Add</button>';
+        actions += iconBtn("add", id, e.queueState === "error" ? "&#xF021;" : "&#xF067;",
+            e.queueState === "error" ? "Retry" : "Add to queue");
     } else {
-        html += '<span class="noplay">mp3 only</span>';
+        actions += '<span class="noplay">mp3 only</span>';
     }
-    return html + '</div></div>';
+    var html = '<div class="row' + (inPlaylist && e.current ? " current" : "") + '">';
+    html += '<div class="buttons">' + actions + '</div>';
+    html += '<div class="row-title" title="' + esc(e.title) + '">' + esc(e.title) + '</div>';
+    html += '<div class="row-meta">' + esc(e.feed) +
+        (e.pubDate ? " \u00b7 " + fmtDate(e.pubDate) : "") +
+        (e.duration ? " \u00b7 " + fmtDuration(e.duration) : "") +
+        (inPlaylist && !e.downloaded ? " \u00b7 queued" : "") +
+        (e.queueState === "error" && e.queueError ? " \u00b7 " + esc(e.queueError) : "") + '</div>';
+    return html + '</div>';
+}
+
+function orderedPlaylist(data) {
+    var items = data.playlist || [];
+    if (!data.playing || !data.currentId) { return items; }
+    var i;
+    for (i = 0; i < items.length; i++) {
+        if (items[i].id === data.currentId) { break; }
+    }
+    if (i <= 0 || i === items.length) { return items; }
+    return [items[i]].concat(items.slice(0, i), items.slice(i + 1));
 }
 
 function renderPlaylist(data) {
     var list = byId("playlist");
     var label = byId("pl-label");
-    var items = data.playlist || [];
+    var items = orderedPlaylist(data);
     if (label) {
         label.innerHTML = "Up next" + (items.length ? " (" + items.length + ")" : "");
     }
@@ -190,11 +199,13 @@ function renderPlaylist(data) {
     var slice = items.slice(start, start + PLAYLIST_PAGE_SIZE);
     var html = "";
     if (items.length === 0) {
-        html = '<div class="empty">Playlist is empty. Tap Sync to queue the latest episode from each subscription, or add episodes in Explore.</div>';
+        html = data.queueMode ?
+            '<div class="empty">Queue is empty. Find an episode in Explore and tap Add. It appears here when its transcript is ready.</div>' :
+            '<div class="empty">Playlist is empty. Open Explore to add an episode.</div>';
     } else {
         var i;
         for (i = 0; i < slice.length; i++) {
-            html += episodeRow(slice[i], true, data.playing, start + i, items.length, !!data.transcriptApi);
+            html += episodeRow(slice[i], true, data.playing, start + i + 1, items.length);
         }
     }
     list.innerHTML = html;
@@ -203,35 +214,69 @@ function renderPlaylist(data) {
 
 function renderExplore(data) {
     var list = byId("explore-list");
-    var label = byId("ex-label");
     var ex = data.explore || {};
     var items = ex.items || [];
-    var total = ex.total || 0;
-    var offset = ex.offset || 0;
-    var limit = ex.limit || 5;
-    var page = limit ? Math.floor(offset / limit) : 0;
-    var pageCount = limit ? Math.max(1, Math.ceil(total / limit)) : 1;
-    if (label) {
-        label.innerHTML = total ? ("All episodes (" + total + ")") : "All episodes";
-    }
+    var paging = explorePaging(data);
+    var total = paging.total;
+    var page = paging.page;
+    var pageCount = paging.pageCount;
+    var visible = data.queueMode ? items.slice(page * paging.limit, (page + 1) * paging.limit) : items;
     var feedBtn = byId("btn-feed");
     if (feedBtn) {
+        var feedTitle = ex.feed;
+        if (data.queueMode && ex.feed) {
+            var shows = data.queueShows || [];
+            for (var si = 0; si < shows.length; si++) {
+                if (shows[si].id === ex.feed) { feedTitle = shows[si].title; break; }
+            }
+        }
+        var fullFeedTitle = feedTitle || "All feeds";
+        var shortFeedTitle = fullFeedTitle.length > 12 ? fullFeedTitle.substring(0, 9) + "\u2026" : fullFeedTitle;
         feedBtn.innerHTML = '<span class="button-icon" aria-hidden="true">&#xF03A;</span> ' +
-            (ex.feed ? esc(ex.feed) : "All feeds");
+            esc(shortFeedTitle);
+        feedBtn.title = fullFeedTitle;
+        feedBtn.setAttribute("aria-label", "Filter: " + fullFeedTitle);
     }
     var html = "";
     if (total === 0) {
-        html = '<div class="empty">No episodes yet. Tap Add show to subscribe from the podcast library, or drop an OPML file at /mnt/us/kpod/var/subscriptions.opml, then tap Sync.</div>';
-    } else if (items.length === 0) {
+        html = '<div class="empty">No episodes yet.</div>';
+    } else if (visible.length === 0) {
         html = '<div class="empty">No matches.</div>';
     } else {
         var i;
-        for (i = 0; i < items.length; i++) {
-            html += episodeRow(items[i], false, false, 0, 0, !!data.transcriptApi);
+        for (i = 0; i < visible.length; i++) {
+            html += episodeRow(visible[i], false, false, 0, 0);
         }
     }
     list.innerHTML = html;
-    renderPager(byId("ex-pager"), page, total ? pageCount : 0, "ex-prev", "ex-next");
+    var pager = byId("ex-pager");
+    if (pager) {
+        pager.innerHTML = total ? '<button type="button" data-nav="ex-page" title="Select page" aria-label="Page ' +
+            (page + 1) + ' of ' + pageCount + '. Select page"' +
+            (pageCount <= 1 ? ' disabled' : '') + '>' + (page + 1) + '</button>' : '';
+    }
+}
+
+function explorePaging(data) {
+    var ex = data.explore || {};
+    var limit = data.queueMode ? PLAYLIST_PAGE_SIZE : (ex.limit || 10);
+    var total = data.queueMode ? (ex.items || []).length : (ex.total || 0);
+    var pageCount = Math.max(1, Math.ceil(total / limit));
+    var page;
+    if (data.queueMode) {
+        var key = (ex.query || "") + "\u0000" + (ex.feed || "");
+        if (key !== kpodState.searchKey) {
+            kpodState.searchKey = key;
+            kpodState.searchPage = 0;
+        }
+        page = kpodState.searchPage;
+    } else {
+        page = Math.floor((ex.offset || 0) / limit);
+    }
+    if (page >= pageCount) { page = pageCount - 1; }
+    if (page < 0) { page = 0; }
+    if (data.queueMode) { kpodState.searchPage = page; }
+    return { total: total, limit: limit, page: page, pageCount: pageCount };
 }
 
 function render(data) {
@@ -252,9 +297,6 @@ function render(data) {
     if (kpodState.panel === "transcript") {
         renderNowTranscript(data);
         fitTranscript();
-    }
-    if (kpodState.overlayKind === "library") {
-        renderLibrary();
     }
 }
 
@@ -287,5 +329,7 @@ function showPanel(name, force) {
         renderNowTranscript(kpodState.lastData);
         fitTranscript();
     }
+    if (name === "explore" && kpodState.lastData && kpodState.lastData.queueMode) {
+        sendExplore(0);
+    }
 }
-

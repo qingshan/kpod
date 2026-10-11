@@ -1,0 +1,24 @@
+[Unit]
+Description=kpod transcript celld API with persistent local storage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qingshan
+WorkingDirectory=/srv/kpod-transcript-celld
+Environment=PATH=/home/qingshan/.local/share/mise/installs/node/24.21.0/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CELLD_ESBUILD=/srv/kpod-transcript-celld/node_modules/.bin/esbuild
+Environment=CELLD_TOKIO_THREADS=2
+Environment=CELLD_MAX_RSS_MB=192
+Environment=CELLD_V8_HEAP_LIMIT_MB=64
+Environment=CELLD_MAX_REQUEST_BODY_BYTES=2097152
+ExecStart=/srv/kpod-transcript-celld/bin/celld dev . --host 127.0.0.1 --port 8780 --no-watch
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

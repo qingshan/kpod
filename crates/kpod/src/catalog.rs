@@ -15,7 +15,7 @@ use std::path::Path;
 pub const MAX_PER_FEED: usize = 200;
 
 /// Rows the Explore page asks for at a time (Mesquite does not scroll).
-pub const EXPLORE_PAGE_SIZE: u64 = 5;
+pub const EXPLORE_PAGE_SIZE: u64 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -59,10 +59,18 @@ impl CatalogEpisode {
             stable_hash(identity),
             ext
         );
+        let queue_id = ep
+            .guid
+            .as_deref()
+            .and_then(|guid| guid.strip_prefix("kpod:"))
+            .filter(|id| id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+        let file_name = queue_id.map(|id| format!("{id}.mp3")).unwrap_or(file_name);
         CatalogEpisode {
-            id: episode_id_for(feed_id, &file_name),
+            id: queue_id
+                .map(str::to_string)
+                .unwrap_or_else(|| episode_id_for(feed_id, &file_name)),
             feed_id: feed_id.to_string(),
-            feed: feed_title.to_string(),
+            feed: ep.show.clone().unwrap_or_else(|| feed_title.to_string()),
             title: ep.title.clone(),
             url,
             file: format!("{}/{}", feed_id, file_name),
@@ -287,6 +295,7 @@ mod tests {
             pub_date: Some(1),
             duration: Some(2),
             transcript: None,
+            show: None,
         };
         let c = CatalogEpisode::from_rss(
             "Radio Lab",
@@ -317,6 +326,7 @@ mod tests {
                 url: "text/one.vtt".into(),
                 content_type: "text/vtt".into(),
             }),
+            show: None,
         };
         let row = CatalogEpisode::from_rss("feed", "Feed", "https://example.com/show.xml", &ep);
         assert_eq!(
@@ -341,6 +351,7 @@ mod tests {
             pub_date: None,
             duration: None,
             transcript: None,
+            show: None,
         };
         let second = rss::Episode {
             guid: Some("second".into()),
@@ -354,5 +365,21 @@ mod tests {
         let url_based =
             CatalogEpisode::from_rss("feed", "Feed", "https://feeds.x/show.xml", &first);
         assert_ne!(a.file, url_based.file);
+    }
+
+    #[test]
+    fn prepared_queue_item_keeps_server_id_and_show() {
+        let xml = r#"<rss xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:kpod="https://kpod.qingshan.dev/ns"><channel><title>Kpod Queue</title><item><title>Episode</title><guid>kpod:abcdef0123456789abcdef01</guid><kpod:show>Example Show</kpod:show><enclosure url="https://cdn.example/one.mp3" type="audio/mpeg"/><podcast:transcript url="https://kpod.example/private/queue/transcripts/abcdef0123456789abcdef01" type="text/vtt"/></item></channel></rss>"#;
+        let feed = crate::rss::parse_feed(xml).unwrap();
+        let item = CatalogEpisode::from_rss(
+            "Kpod Queue",
+            &feed.title,
+            "https://kpod.example/private/queue.xml",
+            &feed.episodes[0],
+        );
+        assert_eq!(item.id, "abcdef0123456789abcdef01");
+        assert_eq!(item.feed, "Example Show");
+        assert_eq!(item.file, "Kpod Queue/abcdef0123456789abcdef01.mp3");
+        assert!(item.transcript_url.is_some());
     }
 }

@@ -1,0 +1,17 @@
+[Unit]
+Description=kpod transcript Whisper runner for celld
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qingshan
+WorkingDirectory=/srv/kpod-transcript-celld
+Environment=PATH=/home/qingshan/.local/share/mise/installs/node/24.21.0/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/kpod-transcript-runner.env
+ExecStart=/home/qingshan/.local/share/mise/installs/node/24.21.0/bin/node --import tsx internal/runner.ts
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

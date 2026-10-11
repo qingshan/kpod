@@ -26,6 +26,12 @@ pub struct Config {
     /// kpod calls `GET {transcriptApi}?url={audio}&id={episode}`.
     #[serde(default)]
     pub transcript_api: String,
+    /// Private RSS feed containing only episodes prepared by the server.
+    #[serde(default)]
+    pub queue_url: String,
+    /// Bearer token for changing the server-owned queue.
+    #[serde(default)]
+    pub queue_token: String,
 }
 
 impl Default for Config {
@@ -34,6 +40,8 @@ impl Default for Config {
             max_episodes: default_max_episodes(),
             compact: false,
             transcript_api: String::new(),
+            queue_url: String::new(),
+            queue_token: String::new(),
         }
     }
 }
@@ -89,6 +97,8 @@ mod tests {
             max_episodes: 7,
             compact: true,
             transcript_api: String::new(),
+            queue_url: String::new(),
+            queue_token: String::new(),
         };
         save(&path, &cfg).expect("save");
         assert_eq!(load(&path), cfg);

@@ -31,16 +31,18 @@ just demo-build   # re-encode target/demo without a device
 
 ## What the Kindle tour does
 
-The tour launches the installed player and refuses to tap until the transport
-row is measured on that frame. It then opens Up next, Explore, and Compact,
-and restores Compact before it exits. A stop is kept only when the framebuffer
-still shows the kpod window and the daemon fields the tour must not touch are
-unchanged (`playing`, `currentId`, playlist ids, explore query, library query).
+The tour launches the installed player and measures the transport row before
+tapping it. It captures the player and transcript, Up next, queue-position
+picker, Explore, results-page picker, feed filter, a filtered show, search
+results, and Compact view. Cards explain server-side transcript preparation,
+automatic queued-audio downloads, and episode submission. Each device frame
+is checked against the daemon's playback and queue state. The tour restores
+the previous Explore query, filter, and Compact setting before it exits.
 
-It does not sync, seek, start or stop playback, toggle Bluetooth, search, add
-a show, or edit the queue. Record it while kpod is idle. If Compact cannot be
-tapped closed, the run sends `ui_set` so the saved layout matches what it
-found.
+It does not sync, play, seek, toggle Bluetooth, add episodes, or edit the
+queue. Record it while kpod is idle, with an empty Explore search. The tour
+needs a queued episode with a transcript, at least two queue entries, multiple
+catalog results, and a subscribed feed to show every stop.
 
 Raw frames land in `target/demo/`. `tools/demo_build.py` writes
 `dist/demo/kpod-demo.mp4`, a GIF, a 1920×1080 cut, and a poster.

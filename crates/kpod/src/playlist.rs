@@ -1,12 +1,12 @@
 //! Persistent play queue at `/mnt/us/kpod/var/playlist.json`.
 //!
-//! Starts empty. After a catalog sync the newest episode of each feed is
-//! appended once (`autoQueued` remembers it so a user removal is not undone).
-//! Explore adds further ids with [`Playlist::add`].
+//! In OPML mode, sync adds each feed's newest episode once and Explore can add
+//! more. In server queue mode, sync mirrors the prepared queue while keeping
+//! local playback progress.
 
 use crate::catalog::CatalogEpisode;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -26,6 +26,49 @@ pub struct Playlist {
 }
 
 impl Playlist {
+    /// Adopt the server queue while retaining progress from matching local episodes.
+    pub fn mirror_prepared(&mut self, ids: Vec<String>, catalog: &[CatalogEpisode]) {
+        let old_current = self.current_id.clone();
+        let old_items = self.items.clone();
+        for id in &ids {
+            if self.progress.contains_key(id) {
+                continue;
+            }
+            let Some(new) = catalog.iter().find(|e| &e.id == id) else {
+                continue;
+            };
+            let previous = old_items.iter().find(|old_id| {
+                catalog
+                    .iter()
+                    .any(|e| &e.id == *old_id && e.title == new.title && e.feed == new.feed)
+            });
+            if let Some(seconds) = previous
+                .and_then(|old_id| self.progress.get(old_id))
+                .copied()
+            {
+                self.progress.insert(id.clone(), seconds);
+            }
+        }
+        let migrated_current = old_current.and_then(|old_id| {
+            let old = catalog.iter().find(|e| e.id == old_id)?;
+            ids.iter()
+                .find(|id| {
+                    catalog
+                        .iter()
+                        .any(|e| &e.id == *id && e.title == old.title && e.feed == old.feed)
+                })
+                .cloned()
+        });
+        self.items = ids;
+        if !self
+            .current_id
+            .as_ref()
+            .is_some_and(|id| self.items.contains(id))
+        {
+            self.current_id = migrated_current.or_else(|| self.items.first().cloned());
+        }
+    }
+
     pub fn add(&mut self, id: &str) -> bool {
         if id.is_empty() || self.items.iter().any(|x| x == id) {
             return false;
@@ -63,6 +106,23 @@ impl Playlist {
             return false;
         }
         self.items.swap(i, j as usize);
+        true
+    }
+
+    /// Move `id` to a one-based position in the queue.
+    pub fn move_to(&mut self, id: &str, position: usize) -> bool {
+        if position == 0 || position > self.items.len() {
+            return false;
+        }
+        let Some(from) = self.items.iter().position(|item| item == id) else {
+            return false;
+        };
+        let to = position - 1;
+        if from == to {
+            return false;
+        }
+        let item = self.items.remove(from);
+        self.items.insert(to, item);
         true
     }
 
@@ -107,6 +167,15 @@ impl Playlist {
         } else {
             Some(self.items[j as usize].clone())
         }
+    }
+
+    /// Next episode that has not already played in this playback session.
+    pub fn next_unplayed(&self, id: &str, played: &HashSet<String>) -> Option<String> {
+        let i = self.items.iter().position(|item| item == id)?;
+        self.items[i + 1..]
+            .iter()
+            .find(|item| !played.contains(*item))
+            .cloned()
     }
 
     /// Queue the newest episode of each feed, newest-first, up to `max` items.
@@ -182,6 +251,39 @@ mod tests {
     }
 
     #[test]
+    fn moves_directly_to_one_based_position() {
+        let mut p = Playlist::default();
+        for id in ["a", "b", "c", "d"] {
+            p.add(id);
+        }
+        assert!(p.move_to("d", 1));
+        assert_eq!(p.items, ["d", "a", "b", "c"]);
+        assert!(p.move_to("d", 4));
+        assert_eq!(p.items, ["a", "b", "c", "d"]);
+        assert!(!p.move_to("d", 4));
+        assert!(!p.move_to("d", 0));
+        assert!(!p.move_to("d", 5));
+        assert!(!p.move_to("missing", 1));
+        assert_eq!(p.current_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn playback_skips_episodes_already_heard_in_session() {
+        let mut p = Playlist::default();
+        for id in ["a", "b", "c"] {
+            p.add(id);
+        }
+        let mut played = HashSet::from(["a".to_string()]);
+        assert_eq!(p.next_unplayed("a", &played).as_deref(), Some("b"));
+        p.move_to_front("b");
+        played.insert("b".to_string());
+        assert_eq!(p.next_unplayed("b", &played).as_deref(), Some("c"));
+        p.move_to_front("c");
+        played.insert("c".to_string());
+        assert_eq!(p.next_unplayed("c", &played), None);
+    }
+
+    #[test]
     fn add_remove_and_neighbor() {
         let mut p = Playlist::default();
         assert!(p.add("a"));
@@ -211,6 +313,23 @@ mod tests {
         assert!(!p.set_progress("c", 90));
         assert!(p.set_progress("c", 0));
         assert_eq!(p.progress_of("c"), 0);
+    }
+
+    #[test]
+    fn server_queue_migrates_current_episode_and_progress() {
+        let mut p = Playlist::default();
+        p.add("old");
+        p.set_progress("old", 51);
+        let mut old = ep("old", "old-feed", 1);
+        old.feed = "Example Show".into();
+        old.title = "Episode".into();
+        let mut new = ep("new", "Kpod Queue", 1);
+        new.feed = old.feed.clone();
+        new.title = old.title.clone();
+        p.mirror_prepared(vec!["new".into()], &[old, new]);
+        assert_eq!(p.items, vec!["new"]);
+        assert_eq!(p.current_id.as_deref(), Some("new"));
+        assert_eq!(p.progress_of("new"), 51);
     }
 
     #[test]

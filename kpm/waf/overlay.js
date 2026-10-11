@@ -2,91 +2,95 @@
 
 function closeOverlay() {
     kpodState.overlayKind = "";
+    kpodState.positionId = "";
     byId("overlay").style.display = "none";
 }
 
-function openLibrary() {
-    if (kpodState.overlayKind) {
-        closeOverlay();
-        return;
-    }
-    kpodState.libraryPage = 0;
-    kpodState.overlayKind = "library";
-    byId("overlay-title").innerHTML = "Add a show";
-    byId("overlay-body").innerHTML =
-        '<div class="field search-row">' +
-        '<label class="cap-label">Podcast library</label>' +
-        '<input type="text" id="f-library" value="" placeholder="Show name or feed URL">' +
-        '<button id="btn-library-search" type="button"><span class="button-icon" aria-hidden="true">&#xF002;</span> Search</button>' +
-        '</div>' +
-        '<div id="library-status" class="empty"></div>' +
-        '<div id="library-list" class="list"></div>' +
-        '<div id="library-pager" class="pager"></div>';
-    byId("overlay").style.display = "";
-    bindTap(byId("btn-library-search"), searchLibrary);
-    byId("f-library").addEventListener("keydown", function (ev) {
-        var code = ev.keyCode || ev.which || 0;
-        if (code !== 13) { return; }
-        if (ev.preventDefault) { ev.preventDefault(); }
-        searchLibrary();
-    });
-    renderLibrary();
-}
-
-function searchLibrary() {
-    kpodState.libraryPage = 0;
-    sendCmd({ op: "library_query", query: (byId("f-library").value || "") });
-}
-
-function renderLibrary() {
-    if (kpodState.overlayKind !== "library") {
-        return;
-    }
-    var statusEl = byId("library-status");
-    var listEl = byId("library-list");
-    var pagerEl = byId("library-pager");
-    if (!statusEl || !listEl || !pagerEl) {
-        return;
-    }
-    var lib = (kpodState.lastData && kpodState.lastData.library) || {};
-    var items = lib.items || [];
-    var state = lib.state || "idle";
-    if (state === "loading") {
-        statusEl.innerHTML = "Searching the podcast library\u2026";
-    } else if (state === "error") {
-        statusEl.innerHTML = esc(lib.error || "Could not search the podcast library");
-    } else if (state === "ready" && items.length === 0) {
-        statusEl.innerHTML = "No shows found.";
-    } else if (state === "ready") {
-        statusEl.innerHTML = "Tap Add, then Sync to download episodes.";
-    } else {
-        statusEl.innerHTML = "Search the podcast library, or paste a feed URL.";
-    }
-    var pageCount = Math.max(1, Math.ceil(items.length / LIBRARY_PAGE_SIZE));
-    if (kpodState.libraryPage >= pageCount) {
-        kpodState.libraryPage = pageCount - 1;
-    }
-    if (kpodState.libraryPage < 0) {
-        kpodState.libraryPage = 0;
-    }
-    var start = kpodState.libraryPage * LIBRARY_PAGE_SIZE;
-    var slice = items.slice(start, start + LIBRARY_PAGE_SIZE);
-    var html = "";
+function openPositionPicker(id) {
+    if (!kpodState.lastData || !kpodState.lastData.playlist || kpodState.overlayKind) { return; }
+    var items = orderedPlaylist(kpodState.lastData);
     var i;
-    for (i = 0; i < slice.length; i++) {
-        var show = slice[i];
-        html += '<div class="row"><div class="row-title">' + esc(show.title) + '</div>';
-        html += '<div class="row-meta">' + esc(show.author || show.url) + '</div><div class="buttons">';
-        if (show.subscribed) {
-            html += '<span class="noplay">Added</span>';
-        } else {
-            html += '<button type="button" data-op="subscribe" data-url="' + esc(show.url) +
-                '" data-title="' + esc(show.title) + '">Add</button>';
-        }
-        html += '</div></div>';
+    for (i = 0; i < items.length; i++) {
+        if (items[i].id === id) { break; }
     }
-    listEl.innerHTML = html;
-    renderPager(pagerEl, kpodState.libraryPage, items.length ? pageCount : 0, "lib-prev", "lib-next");
+    if (i === items.length) { return; }
+    kpodState.positionId = id;
+    kpodState.positionPage = Math.floor(i / POSITION_PAGE_SIZE);
+    kpodState.overlayKind = "position";
+    byId("overlay-title").innerHTML = "Move to position";
+    byId("overlay").style.display = "";
+    renderPositionPicker();
+}
+
+function renderPositionPicker() {
+    var items = orderedPlaylist(kpodState.lastData);
+    var playing = kpodState.lastData.playing;
+    var current = -1;
+    var i;
+    for (i = 0; i < items.length; i++) {
+        if (items[i].id === kpodState.positionId) { current = i; break; }
+    }
+    if (current < 0) { closeOverlay(); return; }
+    var count = Math.ceil(items.length / POSITION_PAGE_SIZE);
+    if (kpodState.positionPage < 0) { kpodState.positionPage = 0; }
+    if (kpodState.positionPage >= count) { kpodState.positionPage = count - 1; }
+    var start = kpodState.positionPage * POSITION_PAGE_SIZE;
+    var html = '<div class="position-title">' + esc(items[current].title) + '</div><div class="position-choices">';
+    for (i = start; i < Math.min(start + POSITION_PAGE_SIZE, items.length); i++) {
+        var position = i + 1;
+        html += '<button type="button" class="position-choice' + (i === current ? ' selected' : '') +
+            '" data-position="' + position + '" aria-label="' +
+            (playing && position === 1 ? 'Play now' : 'Move to position ' + position) + '"' +
+            (i === current ? ' disabled' : '') + '>' + position + '</button>';
+    }
+    html += '</div>';
+    if (count > 1) {
+        html += '<div class="position-pager"><button type="button" data-position-nav="prev"' +
+            (kpodState.positionPage === 0 ? ' disabled' : '') + ' aria-label="Previous positions">&#x2039;</button>' +
+            ' ' + (kpodState.positionPage + 1) + ' / ' + count + ' ' +
+            '<button type="button" data-position-nav="next"' +
+            (kpodState.positionPage + 1 === count ? ' disabled' : '') + ' aria-label="Next positions">&#x203A;</button></div>';
+    }
+    byId("overlay-body").innerHTML = html;
+}
+
+function openPagePicker() {
+    if (!kpodState.lastData || !kpodState.lastData.explore || kpodState.overlayKind) { return; }
+    var paging = explorePaging(kpodState.lastData);
+    var pageCount = paging.pageCount;
+    if (pageCount <= 1) { return; }
+    kpodState.searchPagePickerPage = Math.floor(paging.page / POSITION_PAGE_SIZE);
+    kpodState.overlayKind = "pages";
+    byId("overlay-title").innerHTML = "Go to page";
+    byId("overlay").style.display = "";
+    renderPagePicker();
+}
+
+function renderPagePicker() {
+    var paging = explorePaging(kpodState.lastData);
+    var pageCount = paging.pageCount;
+    if (pageCount <= 1) { closeOverlay(); return; }
+    var groupCount = Math.ceil(pageCount / POSITION_PAGE_SIZE);
+    if (kpodState.searchPagePickerPage < 0) { kpodState.searchPagePickerPage = 0; }
+    if (kpodState.searchPagePickerPage >= groupCount) { kpodState.searchPagePickerPage = groupCount - 1; }
+    var current = paging.page + 1;
+    var start = kpodState.searchPagePickerPage * POSITION_PAGE_SIZE + 1;
+    var html = '<div class="position-title">' + pageCount + ' pages</div><div class="position-choices">';
+    var page;
+    for (page = start; page < Math.min(start + POSITION_PAGE_SIZE, pageCount + 1); page++) {
+        html += '<button type="button" class="position-choice' + (page === current ? ' selected' : '') +
+            '" data-page-number="' + page + '" aria-label="Go to page ' + page + '"' +
+            (page === current ? ' disabled' : '') + '>' + page + '</button>';
+    }
+    html += '</div>';
+    if (groupCount > 1) {
+        html += '<div class="position-pager"><button type="button" data-page-nav="prev"' +
+            (kpodState.searchPagePickerPage === 0 ? ' disabled' : '') + ' aria-label="Previous pages">&#x2039;</button>' +
+            ' ' + (kpodState.searchPagePickerPage + 1) + ' / ' + groupCount + ' ' +
+            '<button type="button" data-page-nav="next"' +
+            (kpodState.searchPagePickerPage + 1 === groupCount ? ' disabled' : '') + ' aria-label="Next pages">&#x203A;</button></div>';
+    }
+    byId("overlay-body").innerHTML = html;
 }
 
 function openFeedPicker() {
@@ -97,11 +101,13 @@ function openFeedPicker() {
         closeOverlay();
         return;
     }
-    var feeds = kpodState.lastData.feeds || [];
-    var html = '<div class="feed-pick" data-feed="">All feeds</div>';
+    var feeds = kpodState.lastData.queueMode ? (kpodState.lastData.queueShows || []) : (kpodState.lastData.feeds || []);
+    var selected = (kpodState.lastData.explore && kpodState.lastData.explore.feed) || "";
+    var html = '<div class="feed-pick' + (selected === "" ? " selected" : "") + '" data-feed="">All feeds</div>';
     var i;
     for (i = 0; i < feeds.length; i++) {
-        html += '<div class="feed-pick" data-feed="' + esc(feeds[i].title) + '">' +
+        var feed = kpodState.lastData.queueMode ? feeds[i].id : feeds[i].title;
+        html += '<div class="feed-pick' + (feed === selected ? " selected" : "") + '" data-feed="' + esc(feed) + '">' +
             esc(feeds[i].title) +
             (feeds[i].episodeCount ? " (" + feeds[i].episodeCount + ")" : "") +
             "</div>";
@@ -334,4 +340,3 @@ function openTranscript(id) {
     kpodState.transcriptLine = 0;
     sendCmd({ op: "transcript_open", id: id });
 }
-

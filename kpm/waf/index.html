@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <title>kpod</title>
-<link rel="stylesheet" type="text/css" href="waf-base.css?v=0.6.2">
-<link rel="stylesheet" type="text/css" href="style.css?v=0.6.2">
+<link rel="stylesheet" type="text/css" href="waf-base.css?v=0.6.25">
+<link rel="stylesheet" type="text/css" href="style.css?v=0.6.25">
 </head>
 <body>
 <div class="page">
@@ -40,19 +40,13 @@
             <div id="pl-pager" class="pager"></div>
         </div>
         <div id="panel-explore" style="display:none">
-            <div class="field search-row">
-                <label class="cap-label">Find</label>
-                <input type="text" id="f-search" value="" placeholder="Episode or show">
-                <button id="btn-search" type="button"><span class="button-icon" aria-hidden="true">&#xF002;</span> Search</button>
+            <div class="field search-row episode-search">
                 <button id="btn-feed" type="button"><span class="button-icon" aria-hidden="true">&#xF03A;</span> All feeds</button>
-            </div>
-            <div class="section-head">
-                <span id="ex-label" class="section-title">All episodes</span>
-                <button id="btn-sync-ex" type="button"><span class="button-icon" aria-hidden="true">&#xF021;</span> Sync</button>
-                <button id="btn-add-show" type="button"><span class="button-icon" aria-hidden="true">&#xF067;</span> Add show</button>
+                <input type="text" id="f-search" value="" placeholder="Episode or show" aria-label="Search episodes">
+                <button id="btn-search" type="button"><span class="button-icon" aria-hidden="true">&#xF002;</span> Search</button>
+                <span id="ex-pager" class="pager"></span>
             </div>
             <div id="explore-list" class="list"></div>
-            <div id="ex-pager" class="pager"></div>
         </div>
     </div>
 </div>
@@ -65,10 +59,10 @@
     <div id="overlay-body"></div>
 </div>
 
-<script type="text/javascript" src="waf-base.js?v=0.6.2"></script>
-<script type="text/javascript" src="core.js?v=0.6.2"></script>
-<script type="text/javascript" src="views.js?v=0.6.2"></script>
-<script type="text/javascript" src="overlay.js?v=0.6.2"></script>
-<script type="text/javascript" src="script.js?v=0.6.2"></script>
+<script type="text/javascript" src="waf-base.js?v=0.6.25"></script>
+<script type="text/javascript" src="core.js?v=0.6.25"></script>
+<script type="text/javascript" src="views.js?v=0.6.25"></script>
+<script type="text/javascript" src="overlay.js?v=0.6.25"></script>
+<script type="text/javascript" src="script.js?v=0.6.25"></script>
 </body>
 </html>

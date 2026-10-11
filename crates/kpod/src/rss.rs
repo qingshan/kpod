@@ -28,6 +28,8 @@ pub struct Episode {
     /// Episode duration in seconds (`itunes:duration`).
     pub duration: Option<u64>,
     pub transcript: Option<TranscriptLink>,
+    /// Show name carried by an item in the server-owned queue feed.
+    pub show: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +123,7 @@ fn parse_rss(root: Node<'_, '_>) -> Result<Feed, String> {
             pub_date,
             duration,
             transcript: transcript_link(item),
+            show: first_named(item, "show").map(text_of),
         });
     }
     Ok(Feed { title, episodes })
@@ -167,6 +170,7 @@ fn parse_atom(root: Node<'_, '_>) -> Result<Feed, String> {
             pub_date,
             duration,
             transcript: transcript_link(entry),
+            show: first_named(entry, "show").map(text_of),
         });
     }
     Ok(Feed { title, episodes })

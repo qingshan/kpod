@@ -20,19 +20,24 @@
 
 var KPOD_ID = "dev.qingshan.kpodd";
 var PRESS_FLASH_MS = 300;
-var PLAYLIST_PAGE_SIZE = 4;
+var PLAYLIST_PAGE_SIZE = 10;
+var POSITION_PAGE_SIZE = 10;
 
 var refreshTimer = null;
 
 var kpodState = {
     lastData: null,
     playlistPage: 0,
+    positionId: "",
+    positionPage: 0,
+    searchPagePickerPage: 0,
+    searchPage: 0,
+    searchKey: "",
     overlayKind: "",
     transcriptId: "",
     transcriptTitle: "",
     transcriptLine: 0,
     navSeq: -1,
-    libraryPage: 0,
     followTranscript: true,
     transcriptFor: "",
     transcriptRequestedId: "",
@@ -46,8 +51,6 @@ var kpodState = {
     fitting: false
 };
 
-var LIBRARY_PAGE_SIZE = 3;
-
 function sendCmd(op) {
     if (sendJsonCmd(KPOD_ID, op)) {
         setError("");
@@ -60,17 +63,14 @@ function fetchStatusJson() {
     pollStatusJson(render, "status.json missing - is kpodd running? Tap the Home screen icon to reopen the app (it restarts the daemon).");
 }
 
-function taskRunning(data) {
-    return data.state === "running" || data.state === "stopping";
-}
-
 function flashThen(el, fn) {
     if (!el) {
         fn();
         return;
     }
-    var active = (" " + (el.className || "") + " ").indexOf(" active ") >= 0 ||
-        (" " + (el.className || "") + " ").indexOf(" primary ") >= 0;
+    var classes = " " + (el.className || "") + " ";
+    var active = classes.indexOf(" active ") >= 0 || classes.indexOf(" primary ") >= 0 ||
+        classes.indexOf(" selected ") >= 0;
     el.style.backgroundColor = active ? "#fff" : "#000";
     el.style.color = active ? "#000" : "#fff";
     setTimeout(function () {
@@ -100,4 +100,3 @@ function bindTap(el, fn) {
     }
     el.addEventListener("mousedown", go);
 }
-

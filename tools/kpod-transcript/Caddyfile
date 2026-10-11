@@ -1,9 +1,10 @@
-# Example site. Replace the hostname. Whisper may run on another SSH host
-# (KTR_WORKER); this block only proxies the API.
 kpod.example.com {
-	@api path /health /transcript
+	handle_path /youtube/* {
+		reverse_proxy 127.0.0.1:8790
+	}
+	@api path /health /transcript /jobs/claim /result/*
 	handle @api {
-		reverse_proxy 127.0.0.1:8777
+		reverse_proxy 127.0.0.1:8780
 	}
 	handle {
 		respond "not found" 404

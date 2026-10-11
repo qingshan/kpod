@@ -1,0 +1,10 @@
+{
+  "name": "kpod-transcript",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "TRANSCRIPTS", "class_name": "Transcripts" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Transcripts"] }],
+  "vars": { "CLIENT_TOKEN": "", "RUNNER_TOKEN": "" }
+}

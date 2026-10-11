@@ -1,4 +1,4 @@
-use super::worker::{request_play, start_job, Job};
+use super::worker::{request_play, start_job, start_queue_update, Job};
 use super::{
     catalog_mutex, index_mutex, neighbor_id, persist_playlist_locked, play_skip, playlist_mutex,
     publish, resolve_play_id, set_status, PLAY_STOP, STOP, WORKER_RUNNING,
@@ -14,7 +14,7 @@ use kpodd::opml::{self, SubscribeResult};
 use kpodd::playback;
 use kpodd::status::{self, FeedSummary, LibraryShow};
 use kpodd::sync::{self, log_line};
-use kpodd::{http, library, transcript, CONFIG_PATH, LOG_PATH, SUBSCRIPTIONS_OPML};
+use kpodd::{http, library, queue, transcript, CONFIG_PATH, LOG_PATH, SUBSCRIPTIONS_OPML};
 
 /// How long to wait before asking again while the transcript service is still working.
 const TRANSCRIPT_POLL: Duration = Duration::from_secs(20);
@@ -24,7 +24,24 @@ static TRANSCRIPT_GEN: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn dispatch(rx: Receiver<Op>) {
     for op in rx {
         match op {
-            Op::SyncNow => start_job(Job::Sync),
+            Op::SyncNow => {
+                if super::current_config().queue_url.is_empty() {
+                    start_job(Job::Sync);
+                } else {
+                    std::thread::spawn(|| {
+                        let result = queue::change(
+                            &super::current_config(),
+                            "refresh",
+                            serde_json::json!({}),
+                        );
+                        if let Err(error) = result {
+                            set_status(|s| s.last_error = Some(error));
+                        } else if !WORKER_RUNNING.load(Ordering::SeqCst) {
+                            start_job(Job::Sync);
+                        }
+                    });
+                }
+            }
             Op::Refresh => start_job(Job::Refresh),
             Op::SyncStop => {
                 STOP.store(true, Ordering::SeqCst);
@@ -57,6 +74,10 @@ pub(crate) fn dispatch(rx: Receiver<Op>) {
                 feed,
                 offset,
             } => {
+                if !super::current_config().queue_url.is_empty() {
+                    refresh_queue_search(query, feed);
+                    continue;
+                }
                 set_status(|s| {
                     s.explore.query = query;
                     s.explore.feed = feed;
@@ -70,6 +91,26 @@ pub(crate) fn dispatch(rx: Receiver<Op>) {
                     set_status(|s| {
                         s.last_error = Some("playlist_add needs an episode id".to_string());
                     });
+                    continue;
+                }
+                if !super::current_config().queue_url.is_empty() {
+                    let (current_id, progress) = {
+                        let pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
+                        let current = pl.current_id.clone().unwrap_or_default();
+                        let progress = pl.progress_of(&current);
+                        (current, progress)
+                    };
+                    let current_started = {
+                        let st = super::lock_status(super::status_mutex());
+                        st.current_id == current_id
+                            && (st.playing || st.play_position > 0 || progress > 0)
+                    };
+                    change_queue(
+                        "add",
+                        serde_json::json!({
+                            "id": id, "currentId": current_id, "currentStarted": current_started
+                        }),
+                    );
                     continue;
                 }
                 let added = {
@@ -90,16 +131,31 @@ pub(crate) fn dispatch(rx: Receiver<Op>) {
                 }
                 log_line(Path::new(LOG_PATH), "playlist add");
             }
-            Op::PlaylistMove { id, dir } => {
+            Op::PlaylistMove { id, dir, position } => {
+                if !super::current_config().queue_url.is_empty() {
+                    change_queue(
+                        "move",
+                        serde_json::json!({ "id": id, "dir": dir, "position": position }),
+                    );
+                    continue;
+                }
                 {
                     let mut pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
-                    pl.move_by(&id, dir);
+                    if let Some(position) = position {
+                        pl.move_to(&id, position);
+                    } else {
+                        pl.move_by(&id, dir);
+                    }
                 }
                 persist_playlist_locked();
                 publish();
                 log_line(Path::new(LOG_PATH), "playlist move");
             }
             Op::PlaylistRemove { id } => {
+                if !super::current_config().queue_url.is_empty() {
+                    change_queue("remove", serde_json::json!({ "id": id }));
+                    continue;
+                }
                 {
                     let mut pl = playlist_mutex().lock().unwrap_or_else(|p| p.into_inner());
                     pl.remove(&id);
@@ -376,7 +432,8 @@ fn search_library(query: String) {
     }
     if library::is_feed_url(&query) {
         set_status(|s| {
-            let subscribed = s.feeds.iter().any(|f| f.url == query);
+            let subscribed = s.feeds.iter().any(|f| f.url == query)
+                || s.queue_shows.iter().any(|f| f.url == query);
             s.library.query = query.clone();
             s.library.state = "ready".into();
             s.library.error.clear();
@@ -408,7 +465,9 @@ fn search_library(query: String) {
             }
             match result {
                 Ok(hits) => {
-                    let urls: Vec<String> = s.feeds.iter().map(|feed| feed.url.clone()).collect();
+                    let mut urls: Vec<String> =
+                        s.feeds.iter().map(|feed| feed.url.clone()).collect();
+                    urls.extend(s.queue_shows.iter().map(|show| show.url.clone()));
                     s.library.state = "ready".into();
                     s.library.error.clear();
                     s.library.items = hits
@@ -432,6 +491,28 @@ fn search_library(query: String) {
 }
 
 fn add_feed(url: &str, title: &str) {
+    if !super::current_config().queue_url.is_empty() {
+        let url = url.to_string();
+        std::thread::spawn(move || {
+            let result = queue::change(
+                &super::current_config(),
+                "feeds",
+                serde_json::json!({ "url": url }),
+            );
+            match result {
+                Ok(()) => {
+                    let ex = super::status_mutex()
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .explore
+                        .clone();
+                    refresh_queue_search(ex.query, ex.feed);
+                }
+                Err(error) => set_status(|s| s.last_error = Some(error)),
+            }
+        });
+        return;
+    }
     match opml::add_subscription(Path::new(SUBSCRIPTIONS_OPML), title, url) {
         Ok(result) => {
             let runs = sync::load_feed_runs();
@@ -484,4 +565,54 @@ fn add_feed(url: &str, title: &str) {
             s.last_error = Some(error);
         }),
     }
+}
+
+pub(super) fn refresh_queue_search(query: String, feed: String) {
+    set_status(|s| {
+        s.explore.query = query.clone();
+        s.explore.feed = feed.clone();
+        s.explore.offset = 0;
+        s.last_error = None;
+    });
+    std::thread::spawn(move || {
+        let cfg = super::current_config();
+        let result = queue::search(&cfg, &query, &feed);
+        let shows = queue::shows(&cfg);
+        set_status(|s| {
+            if s.explore.query != query || s.explore.feed != feed {
+                return;
+            }
+            match result {
+                Ok(view) => s.explore = view,
+                Err(error) => s.last_error = Some(error),
+            }
+            if let Ok(shows) = shows {
+                s.queue_shows = shows;
+            }
+        });
+    });
+}
+
+fn change_queue(action: &'static str, body: serde_json::Value) {
+    std::thread::spawn(move || {
+        let result = queue::change(&super::current_config(), action, body);
+        match result {
+            Ok(()) => {
+                let ex = super::status_mutex()
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .explore
+                    .clone();
+                refresh_queue_search(ex.query, ex.feed);
+                if !super::WORKER_RUNNING.load(Ordering::SeqCst)
+                    && !super::QUEUE_UPDATE_RUNNING.load(Ordering::SeqCst)
+                {
+                    start_job(Job::Sync);
+                } else if super::lock_status(super::status_mutex()).playing {
+                    start_queue_update();
+                }
+            }
+            Err(error) => set_status(|s| s.last_error = Some(error)),
+        }
+    });
 }

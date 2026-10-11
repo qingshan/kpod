@@ -135,8 +135,20 @@ def find_transport(width, height, pixels, dark=80):
             found.append(window)
     if len(found) != 1:
         return None
+    window = found[0]
+    # On the Oasis, an inverted right-hand button can contribute a false
+    # center. The rightmost control mirrors the leftmost control's margin;
+    # verify the candidate buttons against their top borders before using it.
+    pitch = window[1] - window[0]
+    if (width == SCREEN[0] and 90 <= window[0] <= 130 and
+            130 <= pitch <= 155):
+        right = [width - window[0] - pitch * i for i in (2, 1, 0)]
+        if all(at(x - 45, top) < dark and at(x + 45, top) < dark for x in right):
+            window[4:] = right
+        else:
+            return None
     mid_y = (top + bottom) // 2
-    return {name: (item, mid_y) for name, item in zip(BUTTONS, found[0])}
+    return {name: (item, mid_y) for name, item in zip(BUTTONS, window)}
 
 
 def _blank(width, height, value=255):

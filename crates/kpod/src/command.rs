@@ -20,6 +20,8 @@ pub enum Op {
         id: String,
         #[serde(default)]
         dir: i32,
+        #[serde(default)]
+        position: Option<usize>,
     },
     ExploreQuery {
         #[serde(default)]

@@ -103,6 +103,29 @@ pub fn fetch(url: &str, accept: Option<&str>) -> Result<Vec<u8>, String> {
     fetch_with_stop(url, accept, None)
 }
 
+/// Send a small JSON command to the private queue service.
+pub fn post_json(url: &str, token: &str, body: &str) -> Result<Vec<u8>, String> {
+    if token.is_empty() {
+        return Err("queue token is not configured".into());
+    }
+    let mut args = base_args();
+    args.extend([
+        "-X".into(),
+        "POST".into(),
+        "-H".into(),
+        "Content-Type: application/json".into(),
+        "-H".into(),
+        format!("Authorization: Bearer {token}"),
+        "--data-binary".into(),
+        body.into(),
+    ]);
+    let out = run_with_retry(url, args, None)?;
+    if !out.status.success() {
+        return Err(stderr_tail(&out.stderr, url));
+    }
+    Ok(out.stdout)
+}
+
 /// Like [`fetch`], but aborts an active curl when `stop` is set.
 pub fn fetch_with_stop(
     url: &str,

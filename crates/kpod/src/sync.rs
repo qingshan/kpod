@@ -1,13 +1,12 @@
-//! The sync engine: read the OPML subscription file, walk every feed
-//! (RSS 2.0 / Atom), refresh the on-disk catalog, auto-queue each feed's
-//! newest episode, download missing playlist items into
-//! `/mnt/us/kpod/episodes/<feed-id>/`, and keep the file index in sync.
+//! The sync engine. In OPML mode it refreshes local feed catalogs and queues
+//! each feed's newest episode. In server queue mode it mirrors the prepared
+//! feed and downloads its episodes. Both modes keep the on-disk index in sync.
 //! Single-threaded; the stop flag is checked before every download and a set
 //! flag flips the status to `stopping` and aborts cleanly (no `.part` files
 //! left behind).
 //!
-//! `refresh` re-reads the OPML and rebuilds WAF views WITHOUT downloading —
-//! the WAF's Refresh path and the daemon-start seed use it.
+//! `refresh` rebuilds WAF views without downloading; the WAF's Refresh path
+//! and the daemon-start seed use it.
 
 use crate::catalog::{self, CatalogEpisode};
 use crate::config::Config;
@@ -93,6 +92,22 @@ fn feeds_from_opml() -> Vec<FeedRun> {
         });
     }
     feeds
+}
+
+fn feeds_for_config(cfg: &Config) -> Vec<FeedRun> {
+    if cfg.queue_url.trim().is_empty() {
+        return feeds_from_opml();
+    }
+    vec![FeedRun {
+        spec: FeedSpec {
+            title: "Kpod Queue".into(),
+            url: cfg.queue_url.clone(),
+        },
+        feed_id: "Kpod Queue".into(),
+        title: "Kpod Queue".into(),
+        last_sync_at: None,
+        last_error: None,
+    }]
 }
 
 fn merge_index_into_catalog(catalog: &mut Vec<CatalogEpisode>, index: &[IndexedEpisode]) {
@@ -216,6 +231,8 @@ pub fn publish_views(
             downloaded: downloaded_ids.contains(e.id.as_str()),
             playable: e.playable(),
             has_transcript: e.transcript_url.is_some(),
+            queue_state: String::new(),
+            queue_error: String::new(),
         })
         .collect();
 
@@ -225,7 +242,11 @@ pub fn publish_views(
             let episode_count = catalog.iter().filter(|e| e.feed_id == f.feed_id).count() as u64;
             let downloaded = index
                 .iter()
-                .filter(|e| e.file.starts_with(&format!("{}/", f.feed_id)))
+                .filter(|e| {
+                    catalog
+                        .iter()
+                        .any(|c| c.feed_id == f.feed_id && c.id == e.id)
+                })
                 .count() as u64;
             FeedSummary {
                 id: f.feed_id.clone(),
@@ -243,10 +264,12 @@ pub fn publish_views(
         s.feeds = summaries;
         s.playlist = playlist_items;
         s.current_id = playlist.current_id.clone().unwrap_or_default();
-        s.explore.offset = offset as u64;
-        s.explore.total = total as u64;
-        s.explore.limit = limit as u64;
-        s.explore.items = explore_items;
+        if !s.queue_mode {
+            s.explore.offset = offset as u64;
+            s.explore.total = total as u64;
+            s.explore.limit = limit as u64;
+            s.explore.items = explore_items;
+        }
     });
 }
 
@@ -322,7 +345,7 @@ pub fn run_refresh(
     log_path: &Path,
     on_update: &dyn Fn(),
 ) {
-    let feeds = feeds_from_opml();
+    let feeds = feeds_for_config(cfg);
     let pl = snapshot_playlist(playlist);
     let entries = reconcile_index(index, &pl, cfg, log_path);
     {
@@ -348,17 +371,28 @@ pub fn run_refresh(
 
 /// Full sync: fetch every feed into the catalog, auto-queue latest episodes,
 /// download missing playlist items, then reconcile the index.
+pub struct SyncStores<'a> {
+    pub index: &'a Mutex<Vec<IndexedEpisode>>,
+    pub catalog: &'a Mutex<Vec<CatalogEpisode>>,
+    pub playlist: &'a Mutex<Playlist>,
+    pub status: &'a Mutex<Status>,
+    pub log_path: &'a Path,
+}
+
 pub fn run_sync(
-    index: &Mutex<Vec<IndexedEpisode>>,
-    catalog: &Mutex<Vec<CatalogEpisode>>,
-    playlist: &Mutex<Playlist>,
+    stores: SyncStores<'_>,
     cfg: &Config,
     stop: &AtomicBool,
-    status: &Mutex<Status>,
-    log_path: &Path,
     on_update: &dyn Fn(),
     on_queued: &dyn Fn(&str),
 ) {
+    let SyncStores {
+        index,
+        catalog,
+        playlist,
+        status,
+        log_path,
+    } = stores;
     mutate_status(status, on_update, |s| {
         s.phase = status::PHASE_SYNCING.to_string();
         s.downloaded = 0;
@@ -368,7 +402,7 @@ pub fn run_sync(
         s.last_error = None;
     });
 
-    let mut feeds = feeds_from_opml();
+    let mut feeds = feeds_for_config(cfg);
     if feeds.is_empty() {
         mutate_status(status, on_update, |s| {
             s.state = status::STATE_ERROR.to_string();
@@ -382,6 +416,7 @@ pub fn run_sync(
     }
 
     let mut catalog_entries = snapshot_catalog(catalog);
+    let mut queue_ids = Vec::new();
 
     for f in feeds.iter_mut() {
         if stop.load(Ordering::SeqCst) {
@@ -430,11 +465,20 @@ pub fn run_sync(
         if !parsed.title.is_empty() {
             f.title = parsed.title.clone();
         }
-        let eps: Vec<CatalogEpisode> = parsed
+        let mut eps: Vec<CatalogEpisode> = parsed
             .episodes
             .iter()
             .map(|ep| CatalogEpisode::from_rss(&f.feed_id, &f.title, &f.spec.url, ep))
             .collect();
+        if !cfg.queue_url.is_empty() {
+            let downloaded = snapshot_index(index);
+            for ep in &mut eps {
+                if let Some(old) = downloaded.iter().find(|old| can_reuse_download(ep, old)) {
+                    ep.file = old.file.clone();
+                }
+            }
+            queue_ids = eps.iter().map(|ep| ep.id.clone()).collect();
+        }
         let n = eps.len();
         catalog::replace_feed(&mut catalog_entries, &f.feed_id, eps);
         f.last_sync_at = Some(now_epoch());
@@ -455,7 +499,14 @@ pub fn run_sync(
     let auto_added = {
         let latest = catalog::latest_per_feed(&catalog_entries);
         let mut pl = playlist.lock().unwrap_or_else(|p| p.into_inner());
-        let ids = pl.auto_queue_latest(&latest, cfg.max_episodes);
+        let ids = if cfg.queue_url.is_empty() {
+            pl.auto_queue_latest(&latest, cfg.max_episodes)
+        } else if feeds.iter().any(|f| f.last_sync_at.is_some()) {
+            pl.mirror_prepared(queue_ids, &catalog_entries);
+            Vec::new()
+        } else {
+            Vec::new()
+        };
         persist_playlist(&pl, log_path);
         ids
     };
@@ -484,6 +535,85 @@ pub fn run_sync(
     let cat = snapshot_catalog(catalog);
     let pl = snapshot_playlist(playlist);
     publish_views(status, on_update, &feeds, &cat, &pl, &entries);
+}
+
+/// Keep the server queue and its downloads current while the playback worker is busy.
+pub fn update_queue_while_playing(
+    index: &Mutex<Vec<IndexedEpisode>>,
+    catalog: &Mutex<Vec<CatalogEpisode>>,
+    playlist: &Mutex<Playlist>,
+    cfg: &Config,
+    status: &Mutex<Status>,
+    log_path: &Path,
+    on_update: &dyn Fn(),
+) -> Result<(), String> {
+    if cfg.queue_url.is_empty() {
+        return Ok(());
+    }
+    let body = crate::http::fetch_with_stop(&cfg.queue_url, Some(FEED_ACCEPT), None)?;
+    let text = std::str::from_utf8(&body).map_err(|e| format!("queue feed is not UTF-8: {e}"))?;
+    let parsed = rss::parse_feed(text).map_err(|e| format!("could not parse queue feed: {e}"))?;
+    let downloaded = snapshot_index(index);
+    let feed_id = "Kpod Queue";
+    let mut episodes: Vec<CatalogEpisode> = parsed
+        .episodes
+        .iter()
+        .map(|ep| CatalogEpisode::from_rss(feed_id, &parsed.title, &cfg.queue_url, ep))
+        .collect();
+    for ep in &mut episodes {
+        if let Some(old) = downloaded.iter().find(|old| can_reuse_download(ep, old)) {
+            ep.file = old.file.clone();
+        }
+    }
+    let ids = episodes.iter().map(|ep| ep.id.clone()).collect();
+    {
+        let mut cat = catalog.lock().unwrap_or_else(|p| p.into_inner());
+        catalog::replace_feed(&mut cat, feed_id, episodes);
+        merge_index_into_catalog(&mut cat, &downloaded);
+        persist_catalog(&cat, log_path);
+    }
+    {
+        let playing_id = {
+            let s = status.lock().unwrap_or_else(|p| p.into_inner());
+            s.playing.then(|| s.current_id.clone())
+        };
+        let cat = snapshot_catalog(catalog);
+        let mut pl = playlist.lock().unwrap_or_else(|p| p.into_inner());
+        pl.mirror_prepared(ids, &cat);
+        if let Some(id) = playing_id.as_ref().filter(|id| pl.contains(id)) {
+            pl.move_to_front(id);
+        }
+        if let Some(id) = playing_id.filter(|id| !id.is_empty() && !pl.contains(id)) {
+            pl.items.insert(0, id.clone());
+            pl.current_id = Some(id);
+        }
+        persist_playlist(&pl, log_path);
+    }
+    let mut feeds = feeds_for_config(cfg);
+    feeds[0].title = parsed.title;
+    feeds[0].last_sync_at = Some(now_epoch());
+    let cat = snapshot_catalog(catalog);
+    let pl = snapshot_playlist(playlist);
+    publish_views(status, on_update, &feeds, &cat, &pl, &downloaded);
+    download_playlist_items(
+        index,
+        &cat,
+        &pl,
+        &AtomicBool::new(false),
+        status,
+        log_path,
+        on_update,
+    );
+    let entries = snapshot_index(index);
+    publish_views(status, on_update, &feeds, &cat, &pl, &entries);
+    Ok(())
+}
+
+fn can_reuse_download(ep: &CatalogEpisode, old: &IndexedEpisode) -> bool {
+    old.title == ep.title
+        && old.feed == ep.feed
+        && old.file.to_ascii_lowercase().ends_with(".mp3")
+        && ep.size.is_none_or(|size| size == 0 || size == old.size)
 }
 
 fn download_playlist_items(
@@ -554,7 +684,11 @@ pub fn download_one(
     if let Some(parent) = dest.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    mutate_status(status, on_update, |s| s.current = ep.title.clone());
+    mutate_status(status, on_update, |s| {
+        if !s.playing {
+            s.current = ep.title.clone();
+        }
+    });
     crate::http::download_with_stop(&ep.url, &dest, stop)
         .map_err(|e| format!("download {} -> {}: {}", ep.title, ep.url, e))?;
     let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
@@ -608,6 +742,41 @@ pub fn find_playable<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_length_enclosure_can_reuse_matching_download() {
+        let ep = CatalogEpisode {
+            id: "new".into(),
+            feed_id: "queue".into(),
+            feed: "Show".into(),
+            title: "Episode".into(),
+            url: "https://example.com/episode.mp3".into(),
+            file: "queue/new.mp3".into(),
+            content_type: "audio/mpeg".into(),
+            size: Some(0),
+            duration: None,
+            pub_date: None,
+            transcript_url: None,
+            transcript_type: None,
+        };
+        let old = IndexedEpisode {
+            id: "old".into(),
+            feed: "Show".into(),
+            title: "Episode".into(),
+            file: "Show/episode.mp3".into(),
+            size: 123,
+            duration: None,
+            pub_date: None,
+            downloaded_at: 1,
+        };
+        assert!(can_reuse_download(&ep, &old));
+        let mut mismatched = old.clone();
+        mismatched.title = "Another Episode".into();
+        assert!(!can_reuse_download(&ep, &mismatched));
+        let mut known_size = ep;
+        known_size.size = Some(456);
+        assert!(!can_reuse_download(&known_size, &old));
+    }
 
     #[test]
     fn load_feed_runs_is_callable() {

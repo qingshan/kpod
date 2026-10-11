@@ -17,6 +17,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::mutate_status;
 use crate::status::Status;
@@ -45,6 +46,20 @@ fn frame_bytes(f: &Frame) -> &[u8] {
     let ptr = f.data.as_ptr() as *const u8;
     // SAFETY: i16 slice viewed as bytes; length = 2 * data.len().
     unsafe { std::slice::from_raw_parts(ptr, f.data.len() * 2) }
+}
+
+// Keep the decoder from filling the sink with seconds of audio ahead of playback.
+fn pace_output(started: Instant, samples_written: u64, rate: u32, stop: &AtomicBool) {
+    let audio_time = Duration::from_secs_f64(samples_written as f64 / rate as f64);
+    let allowed_ahead = Duration::from_millis(250);
+    let target = audio_time.saturating_sub(allowed_ahead);
+    while !stop.load(Ordering::SeqCst) {
+        let now = started.elapsed();
+        if now >= target {
+            break;
+        }
+        std::thread::sleep((target - now).min(Duration::from_millis(50)));
+    }
 }
 
 /// How a `play_file` call ended. `Seek` means reopen the same file at that second.
@@ -84,10 +99,7 @@ static MP3_INDEX: Mutex<Option<Mp3Index>> = Mutex::new(None);
 fn mp3_byte_at(path: &Path, target_secs: u64) -> Option<u64> {
     let key = path.to_string_lossy().into_owned();
     let mut guard = MP3_INDEX.lock().unwrap_or_else(|p| p.into_inner());
-    let fresh = match guard.as_ref() {
-        Some(idx) if idx.path == key => false,
-        _ => true,
-    };
+    let fresh = !matches!(guard.as_ref(), Some(idx) if idx.path == key);
     if fresh {
         *guard = Some(Mp3Index {
             path: key,
@@ -256,6 +268,8 @@ pub fn play_file(
     let rate = first.sample_rate;
     let channels = first.channels;
     let mut frames_played: u64 = 0;
+    let mut samples_written: u64 = 0;
+    let mut output_started: Option<Instant> = None;
     let mut preload = Some(first);
     if start_secs > 0 {
         if let Some(off) = mp3_byte_at(path, start_secs) {
@@ -268,7 +282,7 @@ pub fn play_file(
             preload = None;
         }
     }
-    let mut skip_until = if preload.is_some() {
+    let skip_until = if preload.is_some() {
         start_secs.saturating_mul(rate as u64)
     } else {
         frames_played
@@ -297,7 +311,10 @@ pub fn play_file(
 
     if let Some(frame) = preload.as_ref() {
         if frames_played >= skip_until {
-            let _ = write_frame(frame);
+            write_frame(frame)?;
+            output_started = Some(Instant::now());
+            samples_written += frame.data.len() as u64 / channels as u64;
+            pace_output(output_started.unwrap(), samples_written, rate as u32, stop);
         }
         frames_played += frame.data.len() as u64 / channels as u64;
     }
@@ -312,12 +329,10 @@ pub fn play_file(
             mutate_status(status, on_update, |s| {
                 s.play_position = target;
             });
-            let target_samples = target.saturating_mul(rate as u64);
-            if target_samples + (rate as u64) < frames_played {
-                end = PlayEnd::Seek(target);
-                break;
-            }
-            skip_until = target_samples;
+            // Reopen the sink for every seek so queued audio from the old
+            // position cannot play after the transcript has moved.
+            end = PlayEnd::Seek(target);
+            break;
         }
         match decoder.next_frame() {
             Ok(f) => {
@@ -338,6 +353,11 @@ pub fn play_file(
                         }
                         break;
                     }
+                    if output_started.is_none() {
+                        output_started = Some(Instant::now());
+                    }
+                    samples_written += n;
+                    pace_output(output_started.unwrap(), samples_written, rate as u32, stop);
                 }
                 frames_played += n;
                 // About once a second, so the transcript can follow playback.
@@ -359,6 +379,10 @@ pub fn play_file(
         }
     }
 
+    // A seek must discard buffered audio from the old position.
+    if matches!(end, PlayEnd::Seek(_)) {
+        let _ = child.kill();
+    }
     // Close stdin (EOS for the sink) and reap the child.
     drop(child.stdin.take());
     let _ = child.wait();

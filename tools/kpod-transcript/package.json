@@ -1,0 +1,22 @@
+{
+  "name": "kpod-transcript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "celld dev .",
+    "test": "tsx --test src/*.test.ts internal/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=.celld/worker.js",
+    "runner": "tsx internal/runner.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2"
+  }
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=kpod private YouTube podcast
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qingshan
+WorkingDirectory=/srv/kpod-transcript-celld
+Environment=PATH=/home/qingshan/.local/share/mise/installs/node/24.21.0/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/kpod-podcast.env
+ExecStart=/home/qingshan/.local/share/mise/installs/node/24.21.0/bin/node --import tsx internal/podcast.ts
+Restart=always
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

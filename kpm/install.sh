@@ -23,6 +23,4 @@ fi
 
 pkg_install
 
-echo "kpod installed. Open kpod from Home, tap Add show in Explore to"
-echo "subscribe from the podcast library, or drop an OPML file at"
-echo "/mnt/us/kpod/var/subscriptions.opml, then tap Sync."
+echo "kpod installed. Open kpod from Home to browse episodes and play your queue."
